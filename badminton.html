@@ -1,0 +1,2015 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#06101a" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>羽毛球双打 · 触屏版</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #06101a; overflow: hidden;
+    touch-action: none; overscroll-behavior: none;
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  #game { display: block; width: 100vw; height: 100vh; height: 100dvh; }
+
+  /* 用来读取 iPhone 刘海 / 底部横条的安全区高度 */
+  .safe-probe {
+    position: fixed;
+    left: 0;
+    width: 1px;
+    visibility: hidden;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="safeTop" class="safe-probe" style="top:0;height:env(safe-area-inset-top,0px)"></div>
+<div id="safeBottom" class="safe-probe" style="bottom:0;height:env(safe-area-inset-bottom,0px)"></div>
+<script>
+(function () {
+  'use strict';
+
+  /* ================= 常量 ================= */
+  const COURT_W = 6.1;      // 双打场地宽（米）
+  const HALF_L  = 6.7;      // 半场长（米）
+  const NET_H   = 1.55;     // 网高（米）
+  const G       = 9.8;      // 重力加速度
+  const WIN_SCORE = 11;     // 每局分数
+
+  /* 移动与体力：速度随累计跑动距离衰减，静止/间歇时回复 */
+  const BASE_SPEED    = 3.1;   // 所有人（你、搭档、对手）的基础移动速度，米/秒
+  const SPEED_FLOOR   = 0.50;  // 速度最低降到基础的 50%
+  const DIST_TO_FLOOR = 120;   // 累计跑动多少米后降到最低（越小消耗越快）
+  const REGEN_ALWAYS  = 0.005; // 任何状态下每秒固定回复 0.5% 体力
+  const POINT_RECOVER = 0.40;  // 一分结束后，回复「已损失体力」的 40%
+  const SMASH_COST    = 0.06;  // 每打一拍杀球额外扣的体力
+  const SMASH_BASE    = 0.50;  // 刚站到落点后方（0.2 米）时的杀球概率
+  const SMASH_GAIN    = 0.35;  // 每多退 1 米，杀球概率增加多少
+  const SMASH_MAX     = 0.92;  // 杀球概率上限
+  const SMASH_BOOST     = 1.35;  // 杀球后短时间内移动速度倍率
+  const SMASH_BOOST_TOP = 1.50;  // 满体力时，加速持续多少秒
+  const SMASH_BOOST_LOW = 0.30;  // 体力见底时，加速持续多少秒
+  const ERR_BASE        = 0.015; // 满体力时玩家失误概率
+  const ERR_FATIGUE     = 0.06;  // 体力见底时额外增加的失误概率
+  const TIRED_CLEAR     = 1.80;  // 体力见底时，高远球/挑球落点缩短多少米
+  const BLOCK_CHANCE    = 0.85;  // 接杀时挡网的概率（其余改挑球/平抽）
+  const DRIVE_BLOCK     = 0.20;  // 接平抽时挡网的概率
+
+  const TEAM_A = 'A';       // 玩家一方（下半场）
+  const TEAM_B = 'B';       // 对手一方（上半场）
+
+  const cv = document.getElementById('game');
+  const ctx = cv.getContext('2d');
+  const view = { w: 0, h: 0, scale: 1, ox: 0, oy: 0, sat: 0, sab: 0 };
+
+  const C = {
+    court:  '#0f7b45',
+    court2: '#0a5830',
+    line:   'rgba(255,255,255,0.90)',
+    teamA:  '#ffcf3d',
+    teamA2: '#e0a018',
+    teamB:  '#ff5d63',
+    teamB2: '#c62a37',
+    skin:   '#ffd6b0',
+    hair:   '#2b1d15'
+  };
+
+  /* ================= 工具 ================= */
+  const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+  const rand  = (a, b) => a + Math.random() * (b - a);
+  const dist  = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+  // 世界坐标(米) -> 屏幕坐标(px)
+  const px = (x) => view.ox + x * view.scale;
+  const py = (y) => view.oy + y * view.scale;
+
+  function angleLerp(a, b, t) {
+    let d = ((b - a + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+    return a + d * Math.min(1, t);
+  }
+
+  function roundRect(x, y, w, h, r) {
+    const rr = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.lineTo(x + w - rr, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+    ctx.lineTo(x + w, y + h - rr);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+    ctx.lineTo(x + rr, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+    ctx.lineTo(x, y + rr);
+    ctx.quadraticCurveTo(x, y, x + rr, y);
+    ctx.closePath();
+  }
+
+  // 读取 iPhone 刘海 / 底部横条的安全区高度
+  function readInset(id) {
+    const el = document.getElementById(id);
+    if (!el) return 0;
+    const r = el.getBoundingClientRect();
+    const h = r.height || 0;
+    return Math.max(0, Math.min(90, h));
+  }
+
+  /* ================= 画布尺寸 ================= */
+  function resize() {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(h * dpr);
+    cv.style.width = w + 'px';
+    cv.style.height = h + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const sat = readInset('safeTop');
+    const sab = readInset('safeBottom');
+
+    view.w = w;
+    view.h = h;
+    view.sat = sat;
+    view.sab = sab;
+    // 上下留出记分板与提示的位置，并避开刘海 / 底部横条
+    view.scale = Math.min(
+      w / (COURT_W + 1.5),
+      (h - sat - sab) / (HALF_L * 2 + 2.9)
+    );
+    view.ox = w / 2;
+    view.oy = sat + (h - sat - sab) / 2 + Math.min(14, h * 0.02);
+  }
+
+  /* ================= 球员 ================= */
+  function makePlayer(o) {
+    return {
+      team: o.team,
+      isPlayer: !!o.isPlayer,
+      name: o.name,
+      baseX: o.x, baseY: o.y,
+      x: o.x, y: o.y,
+      vx: 0, vy: 0,
+      facing: o.team === TEAM_A ? -Math.PI / 2 : Math.PI / 2,
+      aimAngle: o.team === TEAM_A ? -Math.PI / 2 : Math.PI / 2,
+      color: o.color,
+      color2: o.color2,
+      number: o.number,
+      speed: BASE_SPEED,
+      stamina: 1,
+      boostT: 0,
+      active: true,
+      tapTarget: null,
+      reach: o.isPlayer ? 1.55 : 1.35,
+      swing: 0,
+      label: o.label || ''
+    };
+  }
+
+  const players = [
+    makePlayer({ team: TEAM_A, name: '你',   isPlayer: true, x: 1.75, y: 3.55, color: C.teamA, color2: C.teamA2, number: 7, label: '你' }),
+    makePlayer({ team: TEAM_A, name: '搭档', x: -1.50, y: 1.95, color: C.teamA, color2: C.teamA2, number: 3 }),
+    makePlayer({ team: TEAM_B, name: '对手甲', x: 1.55, y: -2.55, color: C.teamB, color2: C.teamB2, number: 5 }),
+    makePlayer({ team: TEAM_B, name: '对手乙', x: -1.55, y: -3.75, color: C.teamB, color2: C.teamB2, number: 9 })
+  ];
+  const me = players[0];
+
+  /* ================= 羽毛球 ================= */
+  const shuttle = {
+    x: 1.3, y: 2.8, z: 1.1,
+    vx: 0, vy: 0, vz: 0,
+    live: false,
+    lastTeam: null,
+    lastPlayer: null,
+    lastShot: 'serve',   // 上一拍球路，用于接杀挡网等衔接判断
+    trail: []
+  };
+
+  /* ================= 比赛状态 ================= */
+  const game = {
+    phase: 'ready',     // ready | serve | rally | point | over
+    mode: 'singles',    // doubles 双打 | singles 单打（默认单打）
+    moveMode: 'drag',   // drag 滑动 | tap 点击 | keyboard 键盘
+    phaseTimer: 0,
+    scoreA: 0,
+    scoreB: 0,
+    server: TEAM_A,
+    rally: 0,
+    msgMain: '',
+    msgSub: '',
+    msgT: 0,
+    shake: 0,
+    hintT: 0,
+    win: null,
+    lastHitAt: 0,
+    serveReady: false   // 玩家移动过才允许发球
+  };
+
+  let nowSec = 0;
+
+  const fx = [];
+
+  /* ================= 输入 ================= */
+  const input = { down: false, id: null, ax: 0, ay: 0, cx: 0, cy: 0, dx: 0, dy: 0, maxR: 66 };
+  const keys = { left: false, right: false, up: false, down: false };
+
+  // 覆盖层按钮的命中区（每次重绘覆盖层时重建）
+  const ui = { buttons: [] };
+  function uiButton(id, x, y, w, h) {
+    ui.buttons.push({ id: id, x: x, y: y, w: w, h: h });
+  }
+  function uiHit(x, y) {
+    for (let i = 0; i < ui.buttons.length; i++) {
+      const b = ui.buttons[i];
+      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return b.id;
+    }
+    return null;
+  }
+
+  function localPos(e) {
+    const r = cv.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+
+  cv.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    audioInit();
+    if (game.phase === 'ready' || game.phase === 'over') {
+      const p = localPos(e);
+      const hit = uiHit(p.x, p.y);
+
+      if (hit === 'mode-singles') { game.mode = 'singles'; applyMode(); return; }
+      if (hit === 'mode-doubles') { game.mode = 'doubles'; applyMode(); return; }
+      if (hit === 'move-drag') { game.moveMode = 'drag'; me.tapTarget = null; return; }
+      if (hit === 'move-tap') { game.moveMode = 'tap'; me.tapTarget = null; return; }
+      if (hit === 'move-keyboard') { game.moveMode = 'keyboard'; me.tapTarget = null; return; }
+      if (hit === 'switch') { toReady(); return; }
+      if (hit === 'start' || hit === 'again') { startMatch(); return; }
+      return;
+    }
+    // 键盘模式：触屏不参与移动
+    if (game.moveMode === 'keyboard') return;
+
+    const p = localPos(e);
+
+    // 点击模式：点哪跑哪（限制在自己半场）
+    if (game.moveMode === 'tap') {
+      const wx = clamp((p.x - view.ox) / view.scale, -3.45, 3.45);
+      const wy = clamp((p.y - view.oy) / view.scale, 0.42, HALF_L + 0.5);
+      me.tapTarget = { x: wx, y: wy };
+      burstFx(wx, wy, 'rgba(255,226,90,0.9)', 5);
+      return;
+    }
+
+    input.down = true;
+    input.id = e.pointerId;
+    input.ax = p.x; input.ay = p.y;
+    input.cx = p.x; input.cy = p.y;
+    input.dx = 0; input.dy = 0;
+    if (cv.setPointerCapture) {
+      try { cv.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    }
+  }, { passive: false });
+
+  cv.addEventListener('pointermove', (e) => {
+    if (!input.down || e.pointerId !== input.id) return;
+    e.preventDefault();
+    const p = localPos(e);
+    input.cx = p.x; input.cy = p.y;
+    let dx = p.x - input.ax;
+    let dy = p.y - input.ay;
+    const m = Math.hypot(dx, dy);
+    // 手指拖出摇杆范围时，摇杆跟着走，避免突然失速
+    if (m > input.maxR * 1.45) {
+      const k = (input.maxR * 1.45) / m;
+      input.ax = p.x - dx * k;
+      input.ay = p.y - dy * k;
+      dx = p.x - input.ax;
+      dy = p.y - input.ay;
+    }
+    input.dx = dx;
+    input.dy = dy;
+  }, { passive: false });
+
+  function endDrag(e) {
+    if (e && input.id !== null && e.pointerId !== input.id) return;
+    input.down = false;
+    input.id = null;
+    input.dx = 0;
+    input.dy = 0;
+  }
+  cv.addEventListener('pointerup', endDrag);
+  cv.addEventListener('pointercancel', endDrag);
+  cv.addEventListener('pointerleave', endDrag);
+  cv.addEventListener('contextmenu', (e) => e.preventDefault());
+  window.addEventListener('blur', () => endDrag(null));
+
+  window.addEventListener('keydown', (e) => {
+    const k = e.key;
+    if (k === 'ArrowLeft' || k === 'a' || k === 'A') keys.left = true;
+    if (k === 'ArrowRight' || k === 'd' || k === 'D') keys.right = true;
+    if (k === 'ArrowUp' || k === 'w' || k === 'W') keys.up = true;
+    if (k === 'ArrowDown' || k === 's' || k === 'S') keys.down = true;
+    if (k === ' ' && (game.phase === 'ready' || game.phase === 'over')) startMatch();
+  });
+  window.addEventListener('keyup', (e) => {
+    const k = e.key;
+    if (k === 'ArrowLeft' || k === 'a' || k === 'A') keys.left = false;
+    if (k === 'ArrowRight' || k === 'd' || k === 'D') keys.right = false;
+    if (k === 'ArrowUp' || k === 'w' || k === 'W') keys.up = false;
+    if (k === 'ArrowDown' || k === 's' || k === 'S') keys.down = false;
+  });
+
+  /* ================= 音效 ================= */
+  let actx = null;
+  function audioInit() {
+    if (!actx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) {
+        try { actx = new AC(); } catch (e) { actx = null; }
+      }
+    }
+    if (actx && actx.state === 'suspended') actx.resume();
+  }
+  function beep(freq, dur, vol, type) {
+    if (!actx || actx.state !== 'running') return;
+    try {
+      const t0 = actx.currentTime;
+      const osc = actx.createOscillator();
+      const g = actx.createGain();
+      osc.type = type || 'sine';
+      osc.frequency.setValueAtTime(freq, t0);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(60, freq * 0.6), t0 + dur);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(vol, t0 + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      osc.connect(g);
+      g.connect(actx.destination);
+      osc.start(t0);
+      osc.stop(t0 + dur + 0.02);
+    } catch (e) { /* ignore */ }
+  }
+
+  /* ================= 比赛流程 ================= */
+  function startMatch() {
+    audioInit();
+    game.phase = 'serve';
+    game.phaseTimer = 0.6;
+    game.serveReady = false;
+    game.scoreA = 0;
+    game.scoreB = 0;
+    game.server = TEAM_A;
+    game.rally = 0;
+    game.msgT = 0;
+    game.msgMain = '';
+    game.msgSub = '';
+    game.hintT = 7.5;
+    game.win = null;
+    game.shake = 0;
+    for (const p of players) p.stamina = 1;
+    me.tapTarget = null;
+    shuttle.live = false;
+    shuttle.trail.length = 0;
+    fx.length = 0;
+    applyMode();
+  }
+
+  // 回到模式选择界面
+  function toReady() {
+    game.phase = 'ready';
+    game.msgT = 0;
+    game.msgMain = '';
+    game.msgSub = '';
+    game.scoreA = 0;
+    game.scoreB = 0;
+    shuttle.live = false;
+    shuttle.trail.length = 0;
+    resetPositions();
+  }
+
+  function resetPositions() {
+    const singles = game.mode === 'singles';
+
+    me.x = singles ? 0 : 1.75;
+    me.y = singles ? 3.20 : 3.55;
+    me.facing = -Math.PI / 2;
+
+    players[1].x = -1.50; players[1].y = 1.95;                 // 搭档（单打时不上场）
+    players[2].x = singles ? 0 : 1.55;
+    players[2].y = singles ? -3.20 : -2.55;
+    players[3].x = -1.55; players[3].y = -3.75;                // 对手乙（单打时不上场）
+
+    for (const p of players) {
+      p.vx = 0;
+      p.vy = 0;
+    }
+    me.tapTarget = null;
+  }
+
+  // 按当前模式开关球员（单打只留你 + 一个对手）
+  function applyMode() {
+    const singles = game.mode === 'singles';
+    players[1].active = !singles;
+    players[3].active = !singles;
+    resetPositions();
+  }
+
+  function teamOther(t) { return t === TEAM_A ? TEAM_B : TEAM_A; }
+
+  // 速度系数：体力越低越慢，最低到 SPEED_FLOOR
+  function speedFactor(p) {
+    return SPEED_FLOOR + (1 - SPEED_FLOOR) * clamp(p.stamina, 0, 1);
+  }
+
+  // 实际移动速度：体力 + 杀球后的短暂加速
+  function moveSpeed(p) {
+    const boost = p.boostT > 0 ? SMASH_BOOST : 1;
+    return p.speed * speedFactor(p) * boost;
+  }
+
+  // 体力消耗与回复
+  function drainStamina(p, meters) {
+    if (meters <= 0) return;
+    p.stamina = Math.max(0, p.stamina - meters / DIST_TO_FLOOR);
+  }
+
+  function updateStamina(dt) {
+    for (const p of players) {
+      if (!p.active) continue;
+      // 杀球后的短暂加速计时
+      if (p.boostT > 0) p.boostT = Math.max(0, p.boostT - dt);
+
+      // 任何状态（跑动也算）每秒固定回 0.5%，不额外加成
+      if (p.stamina < 1) {
+        p.stamina = Math.min(1, p.stamina + REGEN_ALWAYS * dt);
+      }
+    }
+  }
+
+  // 一分结束：按已损失的体力回 40%
+  function recoverAfterPoint() {
+    for (const p of players) {
+      if (!p.active) continue;
+      p.stamina = Math.min(1, p.stamina + (1 - p.stamina) * POINT_RECOVER);
+    }
+  }
+
+  // 解 z(t)=0，得到落点
+  function predictLanding() {
+    if (!shuttle.live) return null;
+    const a = -0.5 * G;
+    const b = shuttle.vz;
+    const c = shuttle.z;
+    const disc = b * b - 4 * a * c;
+    if (disc < 0) return null;
+    const s = Math.sqrt(disc);
+    const t1 = (-b + s) / (2 * a);
+    const t2 = (-b - s) / (2 * a);
+    const t = Math.max(t1, t2);
+    if (!isFinite(t) || t <= 0.02) return null;
+    return { x: shuttle.x + shuttle.vx * t, y: shuttle.y + shuttle.vy * t, t: t };
+  }
+
+  // 从当前位置发球/击球到目标点，自动修正过网高度
+  function launchTo(tx, ty, T) {
+    let t = T;
+    for (let i = 0; i < 12; i++) {
+      const vx = (tx - shuttle.x) / t;
+      const vy = (ty - shuttle.y) / t;
+      const vz = (0 - shuttle.z + 0.5 * G * t * t) / t;
+      let ok = true;
+      if (vy !== 0) {
+        const tc = (0 - shuttle.y) / vy;
+        if (tc > 0 && tc < t) {
+          const zc = shuttle.z + vz * tc - 0.5 * G * tc * tc;
+          if (zc < NET_H + 0.15) ok = false;
+        }
+      }
+      if (ok) {
+        shuttle.vx = vx; shuttle.vy = vy; shuttle.vz = vz;
+        return;
+      }
+      t += 0.16;
+    }
+    shuttle.vx = (tx - shuttle.x) / t;
+    shuttle.vy = (ty - shuttle.y) / t;
+    shuttle.vz = (0 - shuttle.z + 0.5 * G * t * t) / t;
+  }
+
+  function doServe() {
+    const team = game.server;
+    const mates = players.filter((p) => p.team === team && p.active);
+    let server = mates[0];
+    for (const p of mates) {
+      if (Math.abs(p.y) < Math.abs(server.y)) server = p;
+    }
+    const dir = team === TEAM_A ? -1 : 1;
+    const sx = server.x >= 0 ? 1.3 : -1.3;
+
+    shuttle.x = sx;
+    shuttle.y = -dir * 2.9;   // 发球点必须在发球方自己的半场
+    shuttle.z = 1.05;
+    shuttle.vx = 0; shuttle.vy = 0; shuttle.vz = 0;
+    shuttle.trail.length = 0;
+    shuttle.live = true;
+    shuttle.lastTeam = team;
+    shuttle.lastPlayer = server;
+    shuttle.lastShot = 'serve';
+
+    // 斜线发到对角发球区（平快发球，飞行时间短、弧线低）
+    const tx = (sx > 0 ? -1 : 1) * 1.5;
+    const ty = dir * 4.0;
+    launchTo(tx, ty, 0.95);
+
+    server.swing = 0.9;
+    game.rally = 0;
+    game.lastHitAt = nowSec;
+    beep(520, 0.05, 0.03, 'triangle');
+  }
+
+  function awardPoint(team, reason) {
+    if (game.phase !== 'rally') return;
+    shuttle.live = false;
+    shuttle.z = Math.max(shuttle.z, 0);
+
+    if (team === TEAM_A) game.scoreA += 1;
+    else game.scoreB += 1;
+
+    recoverAfterPoint();   // 一分结束，按损失量回 40% 体力
+
+    game.server = team;
+    game.phase = 'point';
+    game.phaseTimer = 1.55;
+    game.msgMain = team === TEAM_A ? '我方得分' : '对手得分';
+    game.msgSub = reason || '';
+    game.msgT = 1.4;
+    game.rally = 0;
+
+    if (team === TEAM_A) {
+      beep(720, 0.09, 0.05, 'sine');
+      beep(1080, 0.12, 0.04, 'sine');
+    } else {
+      beep(300, 0.14, 0.05, 'sine');
+      beep(220, 0.16, 0.04, 'sine');
+    }
+    if (navigator.vibrate) navigator.vibrate(team === TEAM_A ? 12 : 26);
+
+    if (checkGameOver()) return;
+  }
+
+  function checkGameOver() {
+    const a = game.scoreA;
+    const b = game.scoreB;
+    const reached = (x, y) => x >= WIN_SCORE && (x - y >= 2 || x >= 15);
+    if (reached(a, b) || reached(b, a)) {
+      game.phase = 'over';
+      game.win = reached(a, b) ? TEAM_A : TEAM_B;
+      beep(660, 0.2, 0.05, 'sine');
+      return true;
+    }
+    return false;
+  }
+
+  /* ================= 击球 ================= */
+  function chooseTargetX(hitter, ty) {
+    const opps = players.filter((p) => p.team !== hitter.team && p.active);
+    const spots = [-2.45, -1.25, 0, 1.25, 2.45];
+    let bestX = 0;
+    let best = -1e9;
+    for (const cx of spots) {
+      let dmin = 1e9;
+      for (const o of opps) dmin = Math.min(dmin, Math.hypot(o.x - cx, o.y - ty));
+      const score = dmin + Math.random() * 0.8;
+      if (score > best) { best = score; bestX = cx; }
+    }
+    return bestX;
+  }
+
+  /* 各种球路的参数：飞行时间、落点深度、显示名 */
+  const SHOTS = {
+    smash:   { t: 0.95, y: 3.4, name: '杀球',     color: '#ffd23f' },
+    clear:   { t: 2.45, y: 6.00, name: '高远球',   color: '#e8f4ff' },
+    drive:   { t: 1.15, y: 4.3, name: '平抽',     color: '#bfe6ff' },
+    lift:    { t: 2.40, y: 5.80, name: '挑球',     color: '#e8f4ff' },
+    netshot: { t: 1.05, y: 2.3, name: '网前小球', color: '#9ef2c9' },
+    cross:   { t: 1.25, y: 2.6, name: '勾对角',   color: '#ffc78a' },
+    block:   { t: 1.30, y: 1.2, name: '挡网',     color: '#8fd8ff' },
+    netkill: { t: 0.70, y: 2.6, name: '扑球',     color: '#ff9f6e' },
+    push:    { t: 1.25, y: 4.8, name: '推球',     color: '#c9e7ff' }
+  };
+
+  /* 平抽按固定球速换算飞行时间，落点远近都是同一个速度 */
+  const DRIVE_SPEED = 6.5;   // 米/秒
+
+  function hitShuttle(p) {
+    const dir = p.team === TEAM_A ? -1 : 1;
+    const z = shuttle.z;
+    const nearNet = Math.abs(p.y) < 2.35;    // 在网前
+    const backCourt = Math.abs(p.y) > 4.6;   // 在后场
+
+    // 接杀 / 接平抽时可以借力挡网：杀球挡网概率高，平抽低一些
+    const canBlock =
+      (shuttle.lastShot === 'smash' || shuttle.lastShot === 'drive') &&
+      shuttle.lastTeam !== p.team &&
+      z < 2.0 &&
+      Math.abs(p.y) < 3.6;
+    const blockChance = shuttle.lastShot === 'smash' ? BLOCK_CHANCE : DRIVE_BLOCK;
+
+    // 球是否在网前区域（离网 2.2 米以内）
+    const netBall = Math.abs(shuttle.y) < 2.2;
+
+    // 扑球前提：对方刚刚放网（小球/勾对角/挡网），且自己已经贴到网前
+    const enemyNet =
+      (shuttle.lastShot === 'netshot' || shuttle.lastShot === 'cross' || shuttle.lastShot === 'block') &&
+      shuttle.lastTeam !== p.team;
+    const canKill = enemyNet && Math.abs(p.y) < 1.7;
+
+    // 站位离落点越靠后，杀球成功率越高；站在球前面只能过渡
+    const land = predictLanding();
+    const backSide = p.team === TEAM_A ? 1 : -1;
+    const behindDist = land ? (p.y - land.y) * backSide : 0.2;
+    const smashChance = behindDist > 0.2
+      ? clamp(SMASH_BASE + (behindDist - 0.2) * SMASH_GAIN, 0, SMASH_MAX)
+      : 0;
+
+    // 球路选择：接杀 > 网前球 > 位置与高度
+    let type;
+    if (canBlock && Math.random() < blockChance) {
+      type = 'block';
+    } else if (netBall && z > 1.5) {
+      // 网前的球杀不了：满足扑球条件且高于网带才扑，否则平推
+      type = (canKill && z > 1.62 && Math.random() < 0.6) ? 'netkill' : 'push';
+    } else if (z > 1.9) {
+      type = (Math.random() < smashChance) ? 'smash' : 'clear';
+    } else if (nearNet) {
+      type = Math.random() < 0.5 ? 'netshot' : 'cross';
+    } else if (z > 1.05) {
+      // 中前场半高球：多数平抽，少数挑起来，避免平抽对抽太多
+      type = Math.random() < 0.70 ? 'drive' : 'lift';
+    } else if (backCourt) {
+      type = 'lift';
+    } else {
+      type = Math.random() < 0.5 ? 'lift' : 'drive';
+    }
+
+    const cfg = SHOTS[type];
+    let ty = dir * cfg.y;
+    let tx;
+    let wild = false;
+
+    // 体力越低，高远球和挑球越打不到底线
+    if (type === 'clear' || type === 'lift') {
+      const tired = 1 - clamp(p.stamina, 0, 1);
+      ty = dir * (cfg.y - tired * TIRED_CLEAR);
+    }
+
+    // 面对高远球 / 挑球起跳杀时，球飞得更远，落点也可以压得更深
+    if (type === 'smash' && (shuttle.lastShot === 'clear' || shuttle.lastShot === 'lift')) {
+      ty = dir * rand(4.2, 5.2);
+    }
+
+    if (type === 'block') {
+      // 挡网：借杀球的力量把球轻轻挡回对方网前
+      tx = p.x * 0.6 + rand(-0.45, 0.45);
+      ty = dir * rand(0.55, 1.60);
+    } else if (type === 'netkill') {
+      // 扑球：高点下压，打到对方前中场
+      ty = dir * rand(2.2, 3.4);
+      tx = chooseTargetX(p, ty) + rand(-0.25, 0.25);
+      if (p.isPlayer) tx += p.vx * 0.2;
+    } else if (type === 'push') {
+      // 推球：平推对方后场
+      ty = dir * rand(4.4, 5.4);
+      tx = chooseTargetX(p, ty) + rand(-0.35, 0.35);
+      if (p.isPlayer) tx += p.vx * 0.25;
+    } else if (type === 'netshot') {
+      // 网前轻放：贴着网落到对方网前（前发球线以内）
+      tx = p.x * 0.55 + rand(-0.25, 0.25);
+      ty = dir * rand(0.55, 1.55);
+    } else if (type === 'cross') {
+      // 勾对角：斜线送到对面网前另一侧
+      let side;
+      if (Math.abs(p.x) < 0.35) side = Math.random() < 0.5 ? -1 : 1;
+      else side = p.x >= 0 ? -1 : 1;
+      if (p.isPlayer && Math.abs(p.vx) > 1.2) side = Math.sign(p.vx);
+      tx = side * rand(1.55, 2.35);
+      ty = dir * rand(0.75, 1.75);
+    } else {
+      tx = chooseTargetX(p, ty);
+      if (p.isPlayer) {
+        // 玩家滑动方向影响落点：往右滑 -> 球偏右
+        tx = clamp(tx + p.vx * 0.28, -2.7, 2.7);
+      } else {
+        tx += rand(-0.35, 0.35);
+        // 对手偶尔失误，避免无限对拉
+        if (Math.random() < 0.055) {
+          tx = (Math.random() < 0.5 ? -1 : 1) * rand(3.2, 3.9);
+          wild = true;
+        }
+      }
+      ty += rand(-0.45, 0.45);
+    }
+
+    // 玩家失误：体力越低越容易打飞（出边线或出底线）
+    if (p.isPlayer) {
+      const errChance = ERR_BASE + (1 - p.stamina) * ERR_FATIGUE;
+      if (Math.random() < errChance) {
+        wild = true;
+        if (Math.random() < 0.5) {
+          tx = (Math.random() < 0.5 ? -1 : 1) * rand(3.2, 4.0);   // 出边线
+        } else {
+          ty = dir * rand(6.9, 7.5);                               // 出底线
+        }
+      }
+    }
+
+    // 单打边线更窄，正常回球要收在界内（故意的失误球除外）
+    const lim = (game.mode === 'singles' ? 2.59 : COURT_W / 2) - 0.12;
+    if (!wild) tx = clamp(tx, -lim, lim);
+
+    shuttle.lastTeam = p.team;
+    shuttle.lastPlayer = p;
+    shuttle.lastShot = type;
+    p.swing = 1;
+    game.rally += 1;
+    game.lastHitAt = nowSec;
+
+    // 平抽：按 6.5 m/s 反算飞行时间，落点远近不影响球速
+    let T = cfg.t;
+    if (type === 'drive') {
+      const d = Math.hypot(tx - shuttle.x, ty - shuttle.y);
+      T = clamp(d / DRIVE_SPEED, 0.55, 2.2);
+    }
+
+    launchTo(tx, ty, T);
+
+    burstFx(shuttle.x, shuttle.y, type === 'smash' ? '#ffe27a' : 'rgba(255,255,255,0.85)', type === 'smash' ? 14 : 8);
+
+    if (type === 'smash') {
+      // 体力越好，杀完能维持的冲刺越久（1.5 秒 ~ 0.3 秒）
+      p.boostT = SMASH_BOOST_LOW +
+        (SMASH_BOOST_TOP - SMASH_BOOST_LOW) * clamp(p.stamina, 0, 1);
+      p.stamina = Math.max(0, p.stamina - SMASH_COST);   // 杀球额外掉体力
+      beep(240, 0.08, 0.07, 'square');
+      game.shake = Math.max(game.shake, 0.55);
+      if (navigator.vibrate) navigator.vibrate(18);
+    } else if (type === 'netkill') {
+      beep(330, 0.06, 0.06, 'square');
+      game.shake = Math.max(game.shake, 0.3);
+      if (navigator.vibrate) navigator.vibrate(12);
+    } else if (type === 'netshot' || type === 'cross' || type === 'block') {
+      beep(900, 0.05, 0.03, 'sine');
+    } else {
+      beep(760 + Math.random() * 120, 0.045, 0.035, 'triangle');
+    }
+  }
+
+  function tryHits() {
+    if (!shuttle.live) return;
+    if (nowSec - game.lastHitAt < 0.13) return;
+    if (shuttle.vz > 1.6) return;      // 还在明显上升，先不接
+    if (shuttle.z > 2.75) return;      // 太高够不到
+
+    // 接杀：等球落到 1 米以下再出手（真实接杀高度 0.6~1.0 米）
+    if (shuttle.lastShot === 'smash' && shuttle.z > 1.0) return;
+
+    for (const p of players) {
+      if (!p.active) continue;
+      if (p.team === shuttle.lastTeam) continue;
+      const d = Math.hypot(shuttle.x - p.x, shuttle.y - p.y);
+      if (d <= p.reach) {
+        hitShuttle(p);
+        return;
+      }
+    }
+  }
+
+  /* ================= 特效 ================= */
+  function burstFx(x, y, color, n) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = rand(0.4, 2.4);
+      fx.push({
+        x: x, y: y,
+        vx: Math.cos(a) * sp,
+        vy: Math.sin(a) * sp,
+        life: rand(0.25, 0.5),
+        max: 0.5,
+        color: color,
+        r: rand(1.5, 3.4)
+      });
+    }
+  }
+
+  function updateFx(dt) {
+    for (let i = fx.length - 1; i >= 0; i--) {
+      const f = fx[i];
+      f.x += f.vx * dt;
+      f.y += f.vy * dt;
+      f.vx *= 0.92;
+      f.vy *= 0.92;
+      f.life -= dt;
+      if (f.life <= 0) fx.splice(i, 1);
+    }
+    game.shake = Math.max(0, game.shake - dt * 2.2);
+  }
+
+  /* ================= 更新：玩家 ================= */
+  function updatePlayerControl(dt) {
+    let ix = 0;
+    let iy = 0;
+
+    // 键盘：任何模式下都能用（按下即取消点击目标）
+    let kx = 0;
+    let ky = 0;
+    if (keys.left) kx -= 1;
+    if (keys.right) kx += 1;
+    if (keys.up) ky -= 1;
+    if (keys.down) ky += 1;
+
+    if (kx !== 0 || ky !== 0) {
+      const m = Math.hypot(kx, ky);
+      ix = kx / m;
+      iy = ky / m;
+      me.tapTarget = null;
+    } else if (game.moveMode === 'drag' && input.down) {
+      const m = Math.hypot(input.dx, input.dy);
+      const dead = 7;
+      if (m > dead) {
+        const k = Math.min(1, (m - dead) / (input.maxR - dead));
+        ix = (input.dx / m) * k;
+        iy = (input.dy / m) * k;
+      }
+    } else if (game.moveMode === 'tap' && me.tapTarget) {
+      const tdx = me.tapTarget.x - me.x;
+      const tdy = me.tapTarget.y - me.y;
+      const td = Math.hypot(tdx, tdy);
+      if (td < 0.09) {
+        me.tapTarget = null;
+      } else {
+        const spd0 = moveSpeed(me);
+        const mag = Math.min(1, (td * 4) / spd0);   // 接近目标时自动减速
+        ix = (tdx / td) * mag;
+        iy = (tdy / td) * mag;
+      }
+    }
+
+    const spd = moveSpeed(me);
+    const k = 1 - Math.exp(-dt * 15);
+    me.vx += (ix * spd - me.vx) * k;
+    me.vy += (iy * spd - me.vy) * k;
+
+    const nx = clamp(me.x + me.vx * dt, -3.45, 3.45);
+    const ny = clamp(me.y + me.vy * dt, 0.42, HALF_L + 0.5);
+    drainStamina(me, Math.hypot(nx - me.x, ny - me.y));
+    me.x = nx;
+    me.y = ny;
+
+    if (Math.abs(me.vx) + Math.abs(me.vy) > 0.35) {
+      me.facing = angleLerp(me.facing, Math.atan2(me.vy, me.vx), dt * 12);
+    }
+
+    // 发球前的"准备"：玩家动一下才开球
+    if (game.phase === 'serve' && Math.hypot(me.vx, me.vy) > 0.2) {
+      game.serveReady = true;
+    }
+
+    // 球拍指向来球
+    let aim = me.facing;
+    if (shuttle.live && shuttle.y > -0.5) {
+      aim = Math.atan2(shuttle.y - me.y, shuttle.x - me.x);
+    } else {
+      aim = -Math.PI / 2;
+    }
+    me.aimAngle = angleLerp(me.aimAngle, aim, dt * 10);
+  }
+
+  /* ================= 更新：AI ================= */
+  function moveToward(p, tx, ty, dt, spd) {
+    const dx = tx - p.x;
+    const dy = ty - p.y;
+    const d = Math.hypot(dx, dy);
+    let vx = 0;
+    let vy = 0;
+    if (d > 0.06) {
+      const s = Math.min(spd, d * 6);
+      vx = (dx / d) * s;
+      vy = (dy / d) * s;
+    }
+    const k = 1 - Math.exp(-dt * 9);
+    p.vx += (vx - p.vx) * k;
+    p.vy += (vy - p.vy) * k;
+
+    const minY = p.team === TEAM_A ? 0.42 : -HALF_L - 0.5;
+    const maxY = p.team === TEAM_A ? HALF_L + 0.5 : -0.42;
+    const nx = clamp(p.x + p.vx * dt, -3.45, 3.45);
+    const ny = clamp(p.y + p.vy * dt, minY, maxY);
+    drainStamina(p, Math.hypot(nx - p.x, ny - p.y));
+    p.x = nx;
+    p.y = ny;
+
+    if (Math.hypot(p.vx, p.vy) > 0.35) {
+      p.facing = angleLerp(p.facing, Math.atan2(p.vy, p.vx), dt * 10);
+    }
+  }
+
+  function faceShuttle(p, dt) {
+    let aim = p.team === TEAM_A ? -Math.PI / 2 : Math.PI / 2;
+    if (shuttle.live) {
+      aim = Math.atan2(shuttle.y - p.y, shuttle.x - p.x);
+    }
+    p.aimAngle = angleLerp(p.aimAngle, aim, dt * 8);
+  }
+
+  // 各球员的"归位点"：打完一拍后回到自己半场靠中间的位置
+  function homeSpot(p) {
+    if (game.mode === 'singles') {
+      return { x: 0, y: p.team === TEAM_A ? 3.05 : -3.05 };
+    }
+    const side = p.baseX >= 0 ? 1 : -1;   // 负责左半区还是右半区
+    return {
+      x: side * 1.35,
+      y: p.team === TEAM_A ? 2.45 : -2.95
+    };
+  }
+
+  function updateAI(dt) {
+    const landing = predictLanding();
+
+    for (const p of players) {
+      if (p.isPlayer || !p.active) continue;
+
+      if (p.team === TEAM_A) {
+        // 搭档：打完球回中前场，再按球的位置小幅补位
+        const home = homeSpot(p);
+        let tx = home.x;
+        let ty = home.y;
+        if (shuttle.live) {
+          tx = home.x + clamp(shuttle.x * 0.25, -0.9, 0.9);
+          ty = home.y + clamp(shuttle.y * 0.05, -0.35, 0.35);
+        }
+        if (landing && landing.y > 0.2) {
+          const dMe = Math.hypot(landing.x - me.x, landing.y - me.y);
+          const dPartner = Math.hypot(landing.x - p.x, landing.y - p.y);
+          const hisZone = landing.x < 0.1;
+          if (hisZone || dMe > 2.6) {
+            if (dPartner < 4.6) {
+              tx = landing.x;
+              ty = landing.y + 0.3;
+            }
+          } else {
+            tx = 1.0;
+            ty = Math.max(1.2, landing.y * 0.35);
+          }
+        }
+        moveToward(p, tx, ty, dt, moveSpeed(p));
+      } else {
+        // 对手：离落点近的一人接球，另一人补到另一半场；单打时只有自己
+        const mate = players.find((q) => q !== p && q.team === p.team && q.active);
+        const home = homeSpot(p);
+        let tx = home.x;
+        let ty = home.y;
+
+        if (landing && landing.y < -0.2 && shuttle.live) {
+          if (!mate) {
+            tx = landing.x;
+            ty = landing.y - 0.32;
+          } else {
+            const dMe = Math.hypot(landing.x - p.x, landing.y - p.y);
+            const dMate = Math.hypot(landing.x - mate.x, landing.y - mate.y);
+            if (dMe <= dMate + 0.02) {
+              tx = landing.x;
+              ty = landing.y - 0.32;
+            } else {
+              tx = -Math.sign(landing.x || 1) * 1.7;
+              ty = clamp(landing.y * 0.5, -5.6, -1.6);
+            }
+          }
+        } else if (shuttle.live) {
+          tx = home.x + clamp(shuttle.x * 0.25, -0.9, 0.9);
+          ty = home.y + clamp(shuttle.y * 0.05, -0.35, 0.35);
+        }
+        moveToward(p, tx, ty, dt, moveSpeed(p));
+      }
+
+      faceShuttle(p, dt);
+    }
+  }
+
+  /* ================= 更新：球 ================= */
+  function updateShuttle(dt) {
+    if (!shuttle.live) return;
+
+    const p0 = { x: shuttle.x, y: shuttle.y, z: shuttle.z };
+
+    shuttle.vz -= G * dt;
+    shuttle.x += shuttle.vx * dt;
+    shuttle.y += shuttle.vy * dt;
+    shuttle.z += shuttle.vz * dt;
+
+    shuttle.trail.push({ x: shuttle.x, y: shuttle.y, z: shuttle.z, life: 0.28 });
+    if (shuttle.trail.length > 18) shuttle.trail.shift();
+
+    // 过网判定
+    if ((p0.y > 0 && shuttle.y <= 0) || (p0.y < 0 && shuttle.y >= 0)) {
+      const t = p0.y / (p0.y - shuttle.y);
+      const zc = p0.z + (shuttle.z - p0.z) * t;
+      if (zc < NET_H) {
+        burstFx(shuttle.x, 0, 'rgba(200,230,255,0.8)', 12);
+        beep(180, 0.12, 0.05, 'sawtooth');
+        awardPoint(teamOther(shuttle.lastTeam), '挂网');
+        return;
+      }
+    }
+
+    // 落地判定
+    if (shuttle.z <= 0) {
+      const lx = shuttle.x;
+      const ly = shuttle.y;
+      shuttle.z = 0;
+      const halfW = game.mode === 'singles' ? 2.59 : COURT_W / 2;
+      const out = Math.abs(lx) > halfW + 0.03 || Math.abs(ly) > HALF_L + 0.03;
+      const landedSide = ly > 0 ? TEAM_A : TEAM_B;
+      const hitter = shuttle.lastTeam;
+
+      if (out) {
+        awardPoint(teamOther(hitter), '出界');
+      } else if (landedSide === hitter) {
+        awardPoint(teamOther(hitter), '落在自己半场');
+      } else {
+        awardPoint(hitter, '落地得分');
+      }
+      return;
+    }
+
+    tryHits();
+  }
+
+  /* ================= 更新：阶段 ================= */
+  function updatePhase(dt) {
+    if (game.phase === 'serve') {
+      game.phaseTimer -= dt;
+      // 玩家先动一下，才发球
+      if (game.phaseTimer <= 0 && game.serveReady) {
+        doServe();
+        game.phase = 'rally';
+      }
+    } else if (game.phase === 'point') {
+      game.phaseTimer -= dt;
+      if (game.phaseTimer <= 0) {
+        if (game.phase === 'over') return;
+        resetPositions();
+        game.phase = 'serve';
+        game.phaseTimer = 0.8;
+        game.serveReady = false;
+      }
+    }
+    if (game.msgT > 0) game.msgT -= dt;
+    if (game.hintT > 0) game.hintT -= dt;
+  }
+
+  /* ================= 主循环 ================= */
+  let lastT = 0;
+
+  function frame(now) {
+    if (!lastT) lastT = now;
+    let dt = (now - lastT) / 1000;
+    lastT = now;
+    if (dt > 0.05) dt = 0.05;
+    if (dt < 0) dt = 0;
+    nowSec = now / 1000;
+
+    if (game.phase === 'serve' || game.phase === 'rally' || game.phase === 'point') {
+      updatePlayerControl(dt);
+      updateAI(dt);
+      updateShuttle(dt);
+      updateStamina(dt);
+    } else if (game.phase === 'ready' || game.phase === 'over') {
+      updatePlayerControl(dt);
+    }
+
+    updatePhase(dt);
+    updateFx(dt);
+
+    for (const p of players) {
+      if (p.swing > 0) p.swing = Math.max(0, p.swing - dt * 3.2);
+    }
+
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  /* ================= 绘制：背景与场地 ================= */
+  function drawBackground() {
+    const g = ctx.createRadialGradient(
+      view.w / 2, view.h * 0.42, 20,
+      view.w / 2, view.h * 0.42, Math.max(view.w, view.h) * 0.85
+    );
+    g.addColorStop(0, '#15384a');
+    g.addColorStop(0.55, '#0b2130');
+    g.addColorStop(1, '#040c12');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, view.w, view.h);
+
+    // 场馆顶灯的光斑
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const spots = [
+      [0.18, 0.16, 0.30], [0.82, 0.14, 0.26], [0.5, 0.06, 0.22]
+    ];
+    for (const s of spots) {
+      const rg = ctx.createRadialGradient(
+        view.w * s[0], view.h * s[1], 2,
+        view.w * s[0], view.h * s[1], view.w * s[2]
+      );
+      rg.addColorStop(0, 'rgba(160,220,255,0.10)');
+      rg.addColorStop(1, 'rgba(160,220,255,0)');
+      ctx.fillStyle = rg;
+      ctx.fillRect(0, 0, view.w, view.h);
+    }
+    ctx.restore();
+  }
+
+  function drawCourt() {
+    const s = view.scale;
+    const padX = 0.60;
+    const padY = 0.95;
+
+    // 场外缓冲区
+    ctx.save();
+    roundRect(px(-COURT_W / 2 - padX), py(-HALF_L - padY),
+      (COURT_W + padX * 2) * s, (HALF_L * 2 + padY * 2) * s, Math.max(10, s * 0.35));
+    ctx.fillStyle = C.court2;
+    ctx.fill();
+    ctx.restore();
+
+    // 场地主体
+    const g = ctx.createLinearGradient(0, py(-HALF_L), 0, py(HALF_L));
+    g.addColorStop(0, '#0b6b3d');
+    g.addColorStop(0.5, '#118a4c');
+    g.addColorStop(1, '#0b6b3d');
+    ctx.fillStyle = g;
+    ctx.fillRect(px(-COURT_W / 2), py(-HALF_L), COURT_W * s, HALF_L * 2 * s);
+
+    // 场地高光
+    const hg = ctx.createRadialGradient(view.w / 2, view.h / 2, s * 0.5, view.w / 2, view.h / 2, s * 8);
+    hg.addColorStop(0, 'rgba(255,255,255,0.06)');
+    hg.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = hg;
+    ctx.fillRect(px(-COURT_W / 2), py(-HALF_L), COURT_W * s, HALF_L * 2 * s);
+
+    // 边线
+    ctx.strokeStyle = C.line;
+    ctx.lineWidth = Math.max(2, s * 0.045);
+    ctx.lineCap = 'square';
+
+    const L = (x1, y1, x2, y2) => {
+      ctx.beginPath();
+      ctx.moveTo(px(x1), py(y1));
+      ctx.lineTo(px(x2), py(y2));
+      ctx.stroke();
+    };
+    const rect = (x1, y1, x2, y2) => {
+      ctx.strokeRect(px(x1), py(y1), (x2 - x1) * s, (y2 - y1) * s);
+    };
+
+    // 外框（双打边线 + 底线）
+    rect(-3.05, -HALF_L, 3.05, HALF_L);
+    // 单打边线
+    L(2.59, -HALF_L, 2.59, HALF_L);
+    L(-2.59, -HALF_L, -2.59, HALF_L);
+    // 前发球线
+    L(-3.05, -1.98, 3.05, -1.98);
+    L(-3.05, 1.98, 3.05, 1.98);
+    // 双打后发球线
+    L(-3.05, -5.94, 3.05, -5.94);
+    L(-3.05, 5.94, 3.05, 5.94);
+    // 中线
+    L(0, 1.98, 0, HALF_L);
+    L(0, -HALF_L, 0, -1.98);
+
+    // 场地边缘的暗角
+    const vg = ctx.createLinearGradient(0, py(-HALF_L), 0, py(HALF_L));
+    vg.addColorStop(0, 'rgba(0,0,0,0.18)');
+    vg.addColorStop(0.18, 'rgba(0,0,0,0)');
+    vg.addColorStop(0.82, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.22)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(px(-COURT_W / 2), py(-HALF_L), COURT_W * s, HALF_L * 2 * s);
+
+    // 单打：双打边线外侧算界外，压暗提示
+    if (game.mode === 'singles') {
+      const aw = (COURT_W / 2 - 2.59) * s;
+      const ah = HALF_L * 2 * s;
+      ctx.fillStyle = 'rgba(0,0,0,0.26)';
+      ctx.fillRect(px(2.59), py(-HALF_L), aw, ah);
+      ctx.fillRect(px(-COURT_W / 2), py(-HALF_L), aw, ah);
+    }
+  }
+
+  function drawNet() {
+    const s = view.scale;
+    const x1 = px(-COURT_W / 2);
+    const x2 = px(COURT_W / 2);
+    const y0 = py(0);
+    const th = Math.max(8, s * 0.20);
+
+    // 网下阴影
+    ctx.fillStyle = 'rgba(0,0,0,0.30)';
+    ctx.fillRect(x1, y0 - th * 0.15, x2 - x1, th * 1.15);
+
+    // 网面
+    const g = ctx.createLinearGradient(0, y0 - th * 0.5, 0, y0 + th * 0.5);
+    g.addColorStop(0, 'rgba(255,255,255,0.92)');
+    g.addColorStop(0.45, 'rgba(214,232,246,0.55)');
+    g.addColorStop(1, 'rgba(90,110,128,0.65)');
+    ctx.fillStyle = g;
+    ctx.fillRect(x1, y0 - th * 0.42, x2 - x1, th);
+
+    // 网格
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = x1; x <= x2; x += Math.max(5, s * 0.09)) {
+      ctx.moveTo(x, y0 - th * 0.42);
+      ctx.lineTo(x, y0 + th * 0.58);
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    // 上沿白带
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.fillRect(x1, y0 - th * 0.42, x2 - x1, Math.max(2, th * 0.22));
+
+    // 网柱
+    const postR = Math.max(3.5, s * 0.075);
+    for (const side of [-1, 1]) {
+      const cx = px(side * COURT_W / 2);
+      ctx.beginPath();
+      ctx.arc(cx, y0, postR, 0, Math.PI * 2);
+      ctx.fillStyle = '#dfe9f2';
+      ctx.fill();
+      ctx.lineWidth = Math.max(1.4, postR * 0.32);
+      ctx.strokeStyle = '#4a5a68';
+      ctx.stroke();
+    }
+  }
+
+  /* ================= 绘制：落点提示 ================= */
+  function drawLandingMarker() {
+    if (!shuttle.live) return;
+    const land = predictLanding();
+    if (!land) return;
+    if (land.t > 3.4) return;
+
+    const ours = land.y > 0;
+    const pulse = 1 + Math.sin(nowSec * 4.2) * 0.12;
+    const R = Math.max(7, view.scale * 0.40) * pulse;
+
+    ctx.save();
+    ctx.translate(px(land.x), py(land.y));
+    ctx.scale(1, 0.55);
+
+    ctx.beginPath();
+    ctx.arc(0, 0, R, 0, Math.PI * 2);
+    ctx.strokeStyle = ours ? 'rgba(255,226,90,0.90)' : 'rgba(255,255,255,0.32)';
+    ctx.lineWidth = ours ? 2.6 : 1.6;
+    ctx.setLineDash(ours ? [] : [5, 6]);
+    ctx.stroke();
+
+    if (ours) {
+      ctx.beginPath();
+      ctx.arc(0, 0, R * 0.42, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,226,90,0.22)';
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  /* ================= 绘制：点击目标 ================= */
+  function drawTapTarget() {
+    if (game.moveMode !== 'tap' || !me.tapTarget) return;
+
+    const X = px(me.tapTarget.x);
+    const Y = py(me.tapTarget.y);
+    const R = Math.max(6, view.scale * 0.26);
+    const pulse = 1 + Math.sin(nowSec * 6) * 0.10;
+
+    ctx.save();
+
+    // 到目标的虚线
+    ctx.strokeStyle = 'rgba(255,226,90,0.55)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 7]);
+    ctx.beginPath();
+    ctx.moveTo(px(me.x), py(me.y));
+    ctx.lineTo(X, Y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 目标圈
+    ctx.strokeStyle = 'rgba(255,226,90,0.85)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(X, Y, R * pulse, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(X, Y, Math.max(2, R * 0.16), 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,226,90,0.9)';
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  /* ================= 绘制：球员 ================= */
+  function drawRacket(p, R) {
+    const swing = p.swing > 0 ? Math.sin((1 - p.swing) * Math.PI) : 0;
+    const ang = p.aimAngle + swing * 0.7;
+
+    ctx.save();
+    ctx.rotate(ang);
+
+    // 手臂
+    ctx.strokeStyle = C.skin;
+    ctx.lineWidth = Math.max(2.2, R * 0.24);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(R * 0.30, 0);
+    ctx.lineTo(R * 0.95, 0);
+    ctx.stroke();
+
+    // 拍柄
+    ctx.strokeStyle = '#1f2a33';
+    ctx.lineWidth = Math.max(1.6, R * 0.12);
+    ctx.beginPath();
+    ctx.moveTo(R * 0.92, 0);
+    ctx.lineTo(R * 1.38, 0);
+    ctx.stroke();
+
+    // 拍面
+    const cx = R * 1.9;
+    const rx = R * 0.62;
+    const ry = R * 0.48;
+
+    ctx.beginPath();
+    ctx.ellipse(cx, 0, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(214,238,255,0.22)';
+    ctx.fill();
+    ctx.strokeStyle = '#eaf6ff';
+    ctx.lineWidth = Math.max(1.5, R * 0.11);
+    ctx.stroke();
+
+    // 拍线
+    ctx.strokeStyle = 'rgba(235,248,255,0.55)';
+    ctx.lineWidth = Math.max(0.7, R * 0.035);
+    for (let i = -2; i <= 2; i++) {
+      const ox = cx + i * rx * 0.30;
+      ctx.beginPath();
+      ctx.moveTo(ox, -ry * 0.78);
+      ctx.lineTo(ox, ry * 0.78);
+      ctx.stroke();
+    }
+    for (let j = -2; j <= 2; j++) {
+      const oy = j * ry * 0.30;
+      ctx.beginPath();
+      ctx.moveTo(cx - rx * 0.78, oy);
+      ctx.lineTo(cx + rx * 0.78, oy);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  function drawPlayer(p) {
+    const s = view.scale;
+    const X = px(p.x);
+    const Y = py(p.y);
+    const R = Math.max(11, 0.44 * s);
+
+    // 影子
+    ctx.fillStyle = 'rgba(0,0,0,0.30)';
+    ctx.beginPath();
+    ctx.ellipse(X + R * 0.20, Y + R * 0.55, R * 1.02, R * 0.52, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 杀球后的加速拖影
+    if (p.boostT > 0) {
+      const sp = Math.hypot(p.vx, p.vy);
+      if (sp > 0.8) {
+        const ux = p.vx / sp;
+        const uy = p.vy / sp;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,255,255,0.34)';
+        ctx.lineWidth = Math.max(1.5, R * 0.12);
+        ctx.lineCap = 'round';
+        for (let i = -1; i <= 1; i++) {
+          const ox = -uy * i * R * 0.5;
+          const oy = ux * i * R * 0.5;
+          ctx.beginPath();
+          ctx.moveTo(X + ox - ux * R * 1.0, Y + oy - uy * R * 1.0);
+          ctx.lineTo(X + ox - ux * R * 1.9, Y + oy - uy * R * 1.9);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+
+    // 玩家脚下高亮环
+    if (p.isPlayer) {
+      const t = nowSec;
+      const pulse = 1 + Math.sin(t * 3.2) * 0.05;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+      ctx.lineWidth = Math.max(1.5, R * 0.10);
+      ctx.setLineDash([R * 0.5, R * 0.36]);
+      ctx.beginPath();
+      ctx.ellipse(X, Y + R * 0.42, R * 1.32 * pulse, R * 0.68 * pulse, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    ctx.save();
+    ctx.translate(X, Y);
+
+    // 身体（球衣）
+    ctx.beginPath();
+    ctx.ellipse(0, 0, R * 0.66, R * 0.58, p.facing, 0, Math.PI * 2);
+    ctx.fillStyle = p.color;
+    ctx.fill();
+    ctx.lineWidth = Math.max(1.6, R * 0.10);
+    ctx.strokeStyle = 'rgba(10,24,18,0.55)';
+    ctx.stroke();
+
+    // 球衣暗部
+    ctx.beginPath();
+    ctx.ellipse(-R * 0.06, R * 0.08, R * 0.52, R * 0.40, p.facing, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.10)';
+    ctx.fill();
+
+    // 号码
+    ctx.save();
+    ctx.rotate(p.facing + Math.PI / 2);
+    ctx.fillStyle = 'rgba(30,40,35,0.55)';
+    ctx.font = '700 ' + Math.round(R * 0.50) + 'px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(p.number), 0, R * 0.08);
+    ctx.restore();
+
+    // 头（俯视：头发 + 脸）
+    const hx = Math.cos(p.facing) * R * 0.10;
+    const hy = Math.sin(p.facing) * R * 0.10;
+
+    ctx.beginPath();
+    ctx.arc(hx, hy, R * 0.46, 0, Math.PI * 2);
+    ctx.fillStyle = C.hair;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(hx + Math.cos(p.facing) * R * 0.08, hy + Math.sin(p.facing) * R * 0.08, R * 0.36, 0, Math.PI * 2);
+    ctx.fillStyle = C.skin;
+    ctx.fill();
+    ctx.lineWidth = Math.max(1.2, R * 0.07);
+    ctx.strokeStyle = 'rgba(80,50,30,0.35)';
+    ctx.stroke();
+
+    // 发带（队伍色）
+    ctx.beginPath();
+    ctx.arc(hx, hy, R * 0.44, p.facing - 1.9, p.facing + 1.9);
+    ctx.strokeStyle = p.color2;
+    ctx.lineWidth = Math.max(2, R * 0.14);
+    ctx.stroke();
+
+    // 球拍
+    drawRacket(p, R);
+
+    ctx.restore();
+
+    // 玩家头顶标签
+    if (p.isPlayer) {
+      const bob = Math.sin(nowSec * 3) * 2;
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.font = '700 12px "PingFang SC", "Microsoft YaHei", sans-serif';
+      const tw = ctx.measureText('你').width + 16;
+      const ty = Y - R * 2.25 + bob;
+      roundRect(X - tw / 2, ty - 17, tw, 19, 9);
+      ctx.fillStyle = 'rgba(255,207,61,0.95)';
+      ctx.fill();
+      ctx.fillStyle = '#2b2410';
+      ctx.fillText('你', X, ty);
+      ctx.restore();
+    } else if (p.stamina < 0.40) {
+      // 电脑球员的体力条：低于 40% 才出现，提示"这人快跑不动了"
+      const bw = R * 1.7;
+      const bh = Math.max(2.5, R * 0.14);
+      const bx = X - bw / 2;
+      const by = Y - R * 2.0;
+
+      ctx.save();
+      roundRect(bx, by, bw, bh, bh / 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.38)';
+      ctx.fill();
+
+      roundRect(bx, by, Math.max(bh, bw * p.stamina), bh, bh / 2);
+      ctx.fillStyle = p.stamina > 0.45 ? '#7ee2a8' : (p.stamina > 0.2 ? '#ffcf3d' : '#ff8a4c');
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  /* ================= 绘制：球 ================= */
+  function drawShuttle() {
+    const s = view.scale;
+    const X = px(shuttle.x);
+    const Y = py(shuttle.y);
+    // 高度压缩：真实弧顶可达 7~8 米，直接按比例画会飞出屏幕
+    const hz = Math.min(shuttle.z, 4.2) * s * 0.46;
+
+    // 地面投影
+    const a = clamp(0.32 - shuttle.z * 0.035, 0.05, 0.32);
+    const sc = 1 + shuttle.z * 0.055;
+    ctx.fillStyle = 'rgba(0,0,0,' + a.toFixed(3) + ')';
+    ctx.beginPath();
+    ctx.ellipse(X, Y, 0.10 * s * sc, 0.055 * s * sc, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 拖尾（越新越亮）
+    const tn = shuttle.trail.length;
+    for (let i = 0; i < tn; i++) {
+      const t = shuttle.trail[i];
+      const k = (i + 1) / tn;
+      ctx.fillStyle = 'rgba(255,255,255,' + (k * 0.26).toFixed(3) + ')';
+      ctx.beginPath();
+      ctx.arc(px(t.x), py(t.y) - Math.min(t.z, 4.2) * s * 0.46, Math.max(1, s * 0.035 * k), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const bx = X;
+    const by = Y - hz;
+    const ang = Math.atan2(shuttle.vy, shuttle.vx);
+    const u = Math.max(4.2, s * 0.075);
+
+    ctx.save();
+    ctx.translate(bx, by);
+    ctx.rotate(ang);
+
+    // 羽毛裙
+    ctx.beginPath();
+    ctx.moveTo(-u * 0.4, -u * 0.9);
+    ctx.lineTo(-u * 2.9, -u * 1.5);
+    ctx.lineTo(-u * 2.9, u * 1.5);
+    ctx.lineTo(-u * 0.4, u * 0.9);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(250,253,255,0.92)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(150,175,195,0.85)';
+    ctx.lineWidth = Math.max(0.8, u * 0.16);
+    ctx.stroke();
+
+    // 羽毛纹理
+    ctx.strokeStyle = 'rgba(170,195,215,0.55)';
+    ctx.lineWidth = Math.max(0.6, u * 0.10);
+    for (let i = 1; i <= 3; i++) {
+      const t = i / 4;
+      ctx.beginPath();
+      ctx.moveTo(-u * (0.4 + 2.5 * t), -u * (0.9 + 0.6 * t));
+      ctx.lineTo(-u * (0.4 + 2.5 * t), u * (0.9 + 0.6 * t));
+      ctx.stroke();
+    }
+
+    // 球头
+    ctx.beginPath();
+    ctx.arc(0, 0, u * 0.95, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.lineWidth = Math.max(0.9, u * 0.18);
+    ctx.strokeStyle = 'rgba(120,140,160,0.9)';
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  /* ================= 绘制：HUD ================= */
+  function drawHUD() {
+    const w = view.w;
+    const bw = Math.min(330, w - 36);
+    const bh = 62;
+    const bx = (w - bw) / 2;
+    const by = 12 + view.sat;
+
+    ctx.save();
+    roundRect(bx, by, bw, bh, 18);
+    ctx.fillStyle = 'rgba(9,22,30,0.74)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.13)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // 发球方指示条
+    const servingA = game.server === TEAM_A;
+    roundRect(bx + 8, by + 8, 4, bh - 16, 2);
+    ctx.fillStyle = servingA ? C.teamA : C.teamB;
+    ctx.fill();
+
+    ctx.textBaseline = 'middle';
+
+    // 我方
+    ctx.textAlign = 'left';
+    ctx.font = '600 11px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fillText('我方', bx + 24, by + 18);
+
+    ctx.font = '800 26px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = C.teamA;
+    ctx.fillText(String(game.scoreA), bx + 24, by + 40);
+
+    // 对手
+    ctx.textAlign = 'right';
+    ctx.font = '600 11px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fillText('对手', bx + bw - 24, by + 18);
+
+    ctx.font = '800 26px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = C.teamB;
+    ctx.fillText(String(game.scoreB), bx + bw - 24, by + 40);
+
+    // 中间比分
+    ctx.textAlign = 'center';
+    ctx.font = '700 15px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillText('11 分制', bx + bw / 2, by + 26);
+
+    ctx.font = '600 10px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.28)';
+    ctx.fillText(
+      game.phase === 'rally'
+        ? ('第 ' + game.rally + ' 拍')
+        : (game.mode === 'singles' ? '单打' : '双打'),
+      bx + bw / 2, by + 44
+    );
+
+    // 体力条：跑得越久越短，速度随之变慢
+    const fp = (speedFactor(me) - SPEED_FLOOR) / (1 - SPEED_FLOOR);
+    const barY = by + bh + 8;
+    const barX = bx + 42;
+    const barW = bw - 56;
+
+    ctx.textAlign = 'left';
+    ctx.font = '600 9px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.40)';
+    ctx.fillText('体力', bx + 11, barY + 1.5);
+
+    roundRect(barX, barY, barW, 4, 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.13)';
+    ctx.fill();
+
+    if (fp > 0.02) {
+      roundRect(barX, barY, Math.max(4, barW * fp), 4, 2);
+      ctx.fillStyle = fp > 0.45 ? '#7ee2a8' : (fp > 0.2 ? '#ffcf3d' : '#ff8a4c');
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  function drawFx() {
+    for (const f of fx) {
+      const a = clamp(f.life / f.max, 0, 1);
+      ctx.globalAlpha = a;
+      ctx.fillStyle = f.color;
+      ctx.beginPath();
+      ctx.arc(px(f.x), py(f.y), f.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawMessage() {
+    if (game.msgT <= 0) return;
+    const a = clamp(game.msgT / 0.4, 0, 1);
+    const h = view.h;
+    const good = game.msgMain === '我方得分';
+
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.font = '800 30px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillText(game.msgMain, view.w / 2 + 1.5, h * 0.34 + 2);
+
+    ctx.fillStyle = good ? '#ffd93d' : '#ff7a80';
+    ctx.fillText(game.msgMain, view.w / 2, h * 0.34);
+
+    if (game.msgSub) {
+      ctx.font = '600 14px "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.65)';
+      ctx.fillText(game.msgSub, view.w / 2, h * 0.34 + 30);
+    }
+    ctx.restore();
+  }
+
+  function drawJoystick() {
+    if (!input.down) return;
+    const ax = input.ax;
+    const ay = input.ay;
+    const r = input.maxR;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(ax, ay, r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    const m = Math.hypot(input.dx, input.dy);
+    const k = m > r ? r / m : 1;
+    const kx = ax + input.dx * k;
+    const ky = ay + input.dy * k;
+
+    ctx.beginPath();
+    ctx.arc(kx, ky, r * 0.34, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.28)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawHint() {
+    if (game.hintT <= 0 || game.phase === 'ready' || game.phase === 'over') return;
+    const a = clamp(game.hintT / 1.2, 0, 1);
+
+    const msg = game.moveMode === 'tap'
+      ? '点击场地 → 球员跑向点击位置'
+      : (game.moveMode === 'keyboard'
+        ? 'WASD / 方向键移动'
+        : '按住屏幕滑动 → 控制黄色球员');
+
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '600 13px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fillText(msg, view.w / 2, view.h - 42 - view.sab);
+    ctx.restore();
+  }
+
+  // 画一组分段选择器（模式 / 移动方式）
+  function drawSegmented(list, x, y, w, h, radius) {
+    const segW = (w - 8) / list.length;
+
+    roundRect(x, y, w, h, radius);
+    ctx.fillStyle = 'rgba(255,255,255,0.07)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    for (let i = 0; i < list.length; i++) {
+      const it = list[i];
+      const sx = x + 4 + segW * i;
+
+      if (it.on) {
+        roundRect(sx, y + 4, segW, h - 8, Math.max(6, radius - 3));
+        ctx.fillStyle = C.teamA;
+        ctx.fill();
+      }
+
+      ctx.fillStyle = it.on ? '#2b2410' : 'rgba(255,255,255,0.60)';
+      if (it.sub) {
+        ctx.font = '700 15px "PingFang SC", "Microsoft YaHei", sans-serif';
+        ctx.fillText(it.label, sx + segW / 2, y + h / 2 - 7);
+        ctx.font = '600 10px "PingFang SC", "Microsoft YaHei", sans-serif';
+        ctx.fillText(it.sub, sx + segW / 2, y + h / 2 + 9);
+      } else {
+        ctx.font = '700 14px "PingFang SC", "Microsoft YaHei", sans-serif';
+        ctx.fillText(it.label, sx + segW / 2, y + h / 2);
+      }
+
+      uiButton(it.id, sx, y, segW, h);
+    }
+  }
+
+  function drawServePrompt() {
+    if (game.phase !== 'serve' || game.serveReady) return;
+
+    const a = 0.5 + Math.sin(nowSec * 4) * 0.28;
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '700 14px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.fillStyle = '#ffd93d';
+    ctx.fillText('移动一下开始', view.w / 2, view.h - 74 - view.sab);
+    ctx.restore();
+  }
+
+  function drawOverlay() {
+    if (game.phase !== 'ready' && game.phase !== 'over') return;
+
+    const w = view.w;
+    const h = view.h;
+    const singles = game.mode === 'singles';
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(4,12,18,0.62)';
+    ctx.fillRect(0, 0, w, h);
+
+    ui.buttons.length = 0;
+
+    const cw = Math.min(340, w - 40);
+
+    if (game.phase === 'ready') {
+      const ch = 396;
+      const cx = (w - cw) / 2;
+      const cy = (h - ch) / 2;
+
+      roundRect(cx, cy, cw, ch, 24);
+      ctx.fillStyle = 'rgba(12,28,38,0.94)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.14)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      ctx.font = '800 25px "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText('羽毛球', w / 2, cy + 40);
+
+      const mw = Math.min(300, cw - 40);
+      const mx = w / 2 - mw / 2;
+
+      // 模式：单打 / 双打
+      ctx.font = '600 11px "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.fillText('模式', w / 2, cy + 66);
+
+      drawSegmented([
+        { id: 'mode-singles', label: '单打', sub: '1 v 1', on: singles },
+        { id: 'mode-doubles', label: '双打', sub: '2 v 2', on: !singles }
+      ], mx, cy + 80, mw, 46, 16);
+
+      // 移动方式：滑动 / 点击 / 键盘
+      ctx.font = '600 11px "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.fillText('移动方式', w / 2, cy + 148);
+
+      drawSegmented([
+        { id: 'move-drag', label: '滑动', on: game.moveMode === 'drag' },
+        { id: 'move-tap', label: '点击', on: game.moveMode === 'tap' },
+        { id: 'move-keyboard', label: '键盘', on: game.moveMode === 'keyboard' }
+      ], mx, cy + 162, mw, 40, 14);
+
+      const moveHint = game.moveMode === 'tap'
+        ? '点击场地，球员会跑向点击的位置'
+        : (game.moveMode === 'keyboard'
+          ? '用 WASD / 方向键移动（需要键盘）'
+          : '按住屏幕滑动，控制黄色球员');
+
+      ctx.font = '600 12.5px "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.62)';
+      ctx.fillText(moveHint, w / 2, cy + 226);
+
+      ctx.font = '600 12px "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.50)';
+      ctx.fillText(
+        singles ? '单打：整片场地都由你一个人覆盖' : '双打：搭档守左半场，你负责右半场',
+        w / 2, cy + 252
+      );
+      ctx.fillText('每秒回 1% 体力，每分结束再回四成损失', w / 2, cy + 276);
+
+      const bw = 190;
+      const bh = 44;
+      const bx = w / 2 - bw / 2;
+      const by = cy + 316;
+
+      roundRect(bx, by, bw, bh, 22);
+      ctx.fillStyle = C.teamA;
+      ctx.fill();
+      ctx.font = '700 16px "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.fillStyle = '#2b2410';
+      ctx.fillText('开始比赛', w / 2, by + bh / 2);
+      uiButton('start', bx, by, bw, bh);
+    } else {
+      const ch = 252;
+      const cx = (w - cw) / 2;
+      const cy = (h - ch) / 2;
+
+      roundRect(cx, cy, cw, ch, 24);
+      ctx.fillStyle = 'rgba(12,28,38,0.94)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.14)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      const win = game.win === TEAM_A;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      ctx.font = '800 26px "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.fillStyle = win ? '#ffd93d' : '#ff7a80';
+      ctx.fillText(win ? '你赢了！' : '你输了', w / 2, cy + 50);
+
+      ctx.font = '700 32px "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.fillText(game.scoreA + ' : ' + game.scoreB, w / 2, cy + 100);
+
+      ctx.font = '600 12px "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.fillText(singles ? '单打' : '双打', w / 2, cy + 132);
+
+      // 两个按钮：再来一局 / 换模式
+      const gap = 12;
+      const w1 = 148;
+      const w2 = 104;
+      const total = w1 + w2 + gap;
+      const x1 = w / 2 - total / 2;
+      const x2 = x1 + w1 + gap;
+      const by = cy + 164;
+      const bh = 42;
+
+      roundRect(x1, by, w1, bh, 21);
+      ctx.fillStyle = C.teamA;
+      ctx.fill();
+      ctx.font = '700 15px "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.fillStyle = '#2b2410';
+      ctx.fillText('再来一局', x1 + w1 / 2, by + bh / 2);
+
+      roundRect(x2, by, w2, bh, 21);
+      ctx.fillStyle = 'rgba(255,255,255,0.10)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.fillText('换模式', x2 + w2 / 2, by + bh / 2);
+
+      uiButton('again', x1, by, w1, bh);
+      uiButton('switch', x2, by, w2, bh);
+    }
+
+    ctx.restore();
+  }
+
+  /* ================= 绘制主函数 ================= */
+  function draw() {
+    ctx.save();
+    if (game.shake > 0.01) {
+      const s = game.shake;
+      ctx.translate((Math.random() - 0.5) * s * 12, (Math.random() - 0.5) * s * 12);
+    }
+
+    drawBackground();
+    drawCourt();
+    drawLandingMarker();
+    drawTapTarget();
+
+    // 球员按 y 排序，靠下的画在上面
+    const sorted = players.filter((p) => p.active).sort((a, b) => a.y - b.y);
+    for (const p of sorted) drawPlayer(p);
+
+    drawNet();
+    drawFx();
+    drawShuttle();
+
+    ctx.restore();
+
+    drawHUD();
+    drawMessage();
+    drawHint();
+    drawServePrompt();
+    drawJoystick();
+    drawOverlay();
+  }
+
+  /* ================= 启动 ================= */
+  window.addEventListener('resize', resize);
+  window.addEventListener('orientationchange', () => setTimeout(resize, 120));
+  document.addEventListener('gesturestart', (e) => e.preventDefault());
+  document.addEventListener('visibilitychange', () => { lastT = 0; });
+
+  resize();
+  applyMode();          // 默认单打：开场只留你和一名对手
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
