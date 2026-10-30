@@ -1,0 +1,1457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="light" />
+<meta name="theme-color" content="#fff7f2" />
+<title>来次约会吧</title>
+<meta name="description" content="一封小小的约会邀请：选个日子、挑几个活动、定个时间，然后开始约会。" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="来次约会吧" />
+<meta property="og:description" content="选个日子、挑几个活动，再定个时间。" />
+<meta name="twitter:card" content="summary" />
+<style>
+  :root {
+    --cream: #fff7f2;
+    --card: #fffdfa;
+    --ink: #3b2528;
+    --muted: #8a6a6e;
+    --line: #f3dad6;
+    --rose: #d94a63;
+    --rose-deep: #c23a53;
+    --gold: #a06f3e;
+    --serif: "Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", "SimSun", serif;
+    --sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html {
+    height: 100%;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow: hidden;
+    font-family: var(--sans);
+    color: var(--ink);
+    background:
+      radial-gradient(1200px 800px at 12% -10%, #ffe3df 0%, rgba(255, 227, 223, 0) 60%),
+      radial-gradient(900px 700px at 100% 110%, #ffe9d6 0%, rgba(255, 233, 214, 0) 55%),
+      var(--cream);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body.is-locked { overflow: hidden; }
+
+  button {
+    -webkit-appearance: none;
+    appearance: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* ---------- 背景飘浮的心 ---------- */
+
+  .hearts {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .hearts span {
+    position: absolute;
+    left: var(--x);
+    bottom: -8vh;
+    font-family: var(--serif);
+    font-size: var(--s);
+    color: rgba(217, 74, 99, .15);
+    animation: floatUp var(--t) linear var(--d) infinite;
+    will-change: transform, opacity;
+  }
+
+  @keyframes floatUp {
+    0%   { transform: translate3d(0, 0, 0) rotate(-8deg); opacity: 0; }
+    12%  { opacity: 1; }
+    85%  { opacity: .75; }
+    100% { transform: translate3d(26px, -112vh, 0) rotate(18deg); opacity: 0; }
+  }
+
+  /* ---------- 遮罩与卡片 ---------- */
+
+  .overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+    overflow: hidden;
+    background:
+      radial-gradient(900px 700px at 15% -5%, #ffe2de 0%, rgba(255, 226, 222, 0) 60%),
+      radial-gradient(800px 600px at 95% 105%, #ffe8d6 0%, rgba(255, 232, 214, 0) 60%),
+      linear-gradient(160deg, #fff9f5 0%, #fff3ef 55%, #ffefe8 100%);
+    animation: overlayIn .35s ease both;
+  }
+
+  .overlay[hidden] { display: none; }
+
+  .overlay::before {
+    content: "";
+    position: absolute;
+    top: -180px;
+    right: -160px;
+    width: min(70vw, 520px);
+    height: min(70vw, 520px);
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(217, 74, 99, .14), rgba(217, 74, 99, 0) 65%);
+    filter: blur(10px);
+    pointer-events: none;
+  }
+
+  @keyframes overlayIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
+  .dialog {
+    position: relative;
+    z-index: 2;
+    width: min(460px, 100%);
+    max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: 34px 30px 28px;
+    background: var(--card);
+    border: 1px solid rgba(217, 74, 99, .12);
+    border-radius: 30px;
+    box-shadow:
+      0 40px 90px -35px rgba(120, 40, 50, .38),
+      0 14px 36px -20px rgba(120, 40, 50, .22);
+    text-align: center;
+    scrollbar-width: none;
+    animation: cardIn .55s cubic-bezier(.2, .9, .3, 1) both;
+  }
+
+  .dialog::-webkit-scrollbar { display: none; }
+
+  @keyframes cardIn {
+    from { opacity: 0; transform: translateY(22px) scale(.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  .seal {
+    width: 58px;
+    height: 58px;
+    margin: 0 auto 18px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    color: #fff;
+    background: radial-gradient(circle at 32% 26%, #f37c93, var(--rose) 68%);
+    box-shadow:
+      0 16px 28px -14px rgba(217, 74, 99, .8),
+      inset 0 1px 0 rgba(255, 255, 255, .45);
+  }
+
+  .seal svg {
+    display: block;
+    width: 26px;
+    height: 26px;
+  }
+
+  .dialog[data-screen="restaurant"] .seal,
+  .dialog[data-screen="time"] .seal,
+  .dialog[data-screen="choose"] .seal { display: none; }
+
+  .dialog[data-screen="done"] .seal {
+    animation: sealPulse 1.8s ease-in-out infinite;
+  }
+
+  @keyframes sealPulse {
+    0%, 100% { transform: scale(1); }
+    50%      { transform: scale(1.06); }
+  }
+
+  /* ---------- 每一屏 ---------- */
+
+  .screen { animation: screenIn .4s cubic-bezier(.2, .9, .3, 1) both; }
+  .screen[hidden] { display: none; }
+
+  @keyframes screenIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .eyebrow {
+    margin: 0 0 12px;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 10px;
+    letter-spacing: .3em;
+    text-transform: uppercase;
+    color: var(--gold);
+  }
+
+  h2 {
+    margin: 0;
+    font-family: var(--serif);
+    font-size: clamp(27px, 6.6vw, 35px);
+    font-weight: 600;
+    line-height: 1.28;
+    letter-spacing: .01em;
+  }
+
+  h2:focus { outline: none; }
+
+  .desc {
+    margin: 13px 0 24px;
+    color: var(--muted);
+    font-size: 14.5px;
+    line-height: 1.85;
+    letter-spacing: .01em;
+  }
+
+  .micro {
+    margin: 14px 0 0;
+    font-size: 12px;
+    color: #8f6d70;
+    letter-spacing: .02em;
+  }
+
+  /* ---------- 主按钮 ---------- */
+
+  .btn-primary {
+    width: 100%;
+    height: 56px;
+    border: 0;
+    border-radius: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    font: inherit;
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    color: #fff;
+    background: linear-gradient(180deg, #e15a72 0%, #cf4059 55%, #c23850 100%);
+    box-shadow:
+      0 18px 32px -16px rgba(194, 56, 80, .9),
+      inset 0 1px 0 rgba(255, 255, 255, .28);
+    cursor: pointer;
+    transition: transform .14s ease, filter .18s ease, box-shadow .18s ease, opacity .18s ease;
+  }
+
+  .btn-primary:hover { filter: brightness(1.05); }
+  .btn-primary:active { transform: scale(.985); }
+
+  .btn-primary:focus-visible {
+    outline: 3px solid rgba(217, 74, 99, .3);
+    outline-offset: 3px;
+  }
+
+  .btn-primary:disabled {
+    opacity: .35;
+    filter: grayscale(.2);
+    box-shadow: none;
+    cursor: not-allowed;
+  }
+
+  .btn-primary svg {
+    flex: none;
+    width: 18px;
+    height: 18px;
+  }
+
+  /* ---------- 活动选择 ---------- */
+
+  .options {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin: 20px 0 22px;
+  }
+
+  .option {
+    position: relative;
+    min-height: 92px;
+    padding: 13px 13px 11px;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: #fffaf8;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: transform .14s ease, border-color .18s ease,
+                background .18s ease, box-shadow .18s ease;
+  }
+
+  .option:hover {
+    border-color: #e7b6b3;
+    transform: translateY(-1px);
+  }
+
+  .option:active { transform: scale(.985); }
+
+  .option:focus-visible {
+    outline: 3px solid rgba(217, 74, 99, .25);
+    outline-offset: 2px;
+  }
+
+  .option[aria-pressed="true"] {
+    border-color: var(--rose);
+    background: linear-gradient(180deg, #fff4f5, #ffe9ec);
+    box-shadow: 0 12px 24px -18px rgba(217, 74, 99, .7);
+  }
+
+  .option-emoji {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 23px;
+    line-height: 1;
+  }
+
+  .option-label {
+    display: block;
+    font-size: 14.5px;
+    font-weight: 700;
+  }
+
+  .option-sub {
+    display: block;
+    margin-top: 3px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--muted);
+  }
+
+  .option-check {
+    position: absolute;
+    top: 9px;
+    right: 9px;
+    width: 18px;
+    height: 18px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--rose);
+    color: #fff;
+    font-size: 11px;
+    opacity: 0;
+    transform: scale(.4);
+    transition: opacity .18s ease, transform .18s ease;
+  }
+
+  .option[aria-pressed="true"] .option-check {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  /* ---------- 选择餐厅 ---------- */
+
+  .restaurants {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin: 18px 0 20px;
+  }
+
+  .restaurant {
+    position: relative;
+    min-height: 58px;
+    padding: 10px 10px 9px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: #fffaf8;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: transform .14s ease, border-color .18s ease,
+                background .18s ease, box-shadow .18s ease;
+  }
+
+  .restaurant:hover {
+    border-color: #e7b6b3;
+    transform: translateY(-1px);
+  }
+
+  .restaurant:active { transform: scale(.985); }
+
+  .restaurant:focus-visible {
+    outline: 3px solid rgba(217, 74, 99, .25);
+    outline-offset: 2px;
+  }
+
+  .restaurant[aria-pressed="true"] {
+    border-color: var(--rose);
+    background: linear-gradient(180deg, #fff4f5, #ffe9ec);
+    box-shadow: 0 12px 24px -18px rgba(217, 74, 99, .7);
+  }
+
+  .restaurant-name {
+    display: block;
+    padding-right: 18px;
+    font-size: 12.5px;
+    font-weight: 700;
+    line-height: 1.3;
+  }
+
+  .restaurant-tag {
+    display: block;
+    margin-top: 3px;
+    font-size: 10px;
+    line-height: 1.3;
+    color: var(--muted);
+  }
+
+  .restaurant .option-check {
+    top: 7px;
+    right: 7px;
+    width: 16px;
+    height: 16px;
+    font-size: 10px;
+  }
+
+  .restaurant[aria-pressed="true"] .option-check {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  /* ---------- 选择日期 ---------- */
+
+  .days {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin: 20px 0 22px;
+  }
+
+  .day {
+    position: relative;
+    min-height: 120px;
+    padding: 18px 14px 14px;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: #fffaf8;
+    color: var(--ink);
+    font: inherit;
+    text-align: center;
+    cursor: pointer;
+    transition: transform .14s ease, border-color .18s ease,
+                background .18s ease, box-shadow .18s ease;
+  }
+
+  .day:hover {
+    border-color: #e7b6b3;
+    transform: translateY(-1px);
+  }
+
+  .day:active { transform: scale(.985); }
+
+  .day:focus-visible {
+    outline: 3px solid rgba(217, 74, 99, .25);
+    outline-offset: 2px;
+  }
+
+  .day[aria-pressed="true"] {
+    border-color: var(--rose);
+    background: linear-gradient(180deg, #fff4f5, #ffe9ec);
+    box-shadow: 0 12px 24px -18px rgba(217, 74, 99, .7);
+  }
+
+  .day-en {
+    display: block;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 9.5px;
+    letter-spacing: .22em;
+    color: var(--gold);
+  }
+
+  .day-label {
+    display: block;
+    margin-top: 8px;
+    font-family: var(--serif);
+    font-size: 26px;
+    font-weight: 600;
+    line-height: 1.2;
+  }
+
+  .day-sub {
+    display: block;
+    margin-top: 6px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--muted);
+  }
+
+  .day[aria-pressed="true"] .option-check {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  /* ---------- 选择时间 ---------- */
+
+  .time-display {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 10px;
+    margin: 20px 0 4px;
+  }
+
+  .time-big {
+    font-family: var(--serif);
+    font-size: clamp(42px, 12vw, 56px);
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: .02em;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+
+  .time-period {
+    font-size: 12px;
+    letter-spacing: .16em;
+    color: var(--gold);
+  }
+
+  .time-slider {
+    margin: 4px 0 2px;
+  }
+
+  .time-range {
+    -webkit-appearance: none;
+    appearance: none;
+    display: block;
+    width: 100%;
+    height: 44px;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .time-range:focus { outline: none; }
+
+  .time-range::-webkit-slider-runnable-track {
+    height: 8px;
+    border-radius: 999px;
+    background: linear-gradient(
+      90deg,
+      var(--rose) 0%,
+      var(--rose) var(--fill, 50%),
+      #f0dedb var(--fill, 50%),
+      #f0dedb 100%
+    );
+  }
+
+  .time-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    box-sizing: border-box;
+    width: 28px;
+    height: 28px;
+    margin-top: -10px;
+    border: 7px solid var(--rose);
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 6px 16px -4px rgba(194, 56, 80, .5);
+  }
+
+  .time-range:focus-visible::-webkit-slider-thumb {
+    box-shadow:
+      0 0 0 6px rgba(217, 74, 99, .16),
+      0 6px 16px -4px rgba(194, 56, 80, .5);
+  }
+
+  .time-range::-moz-range-track {
+    height: 8px;
+    border-radius: 999px;
+    background: #f0dedb;
+  }
+
+  .time-range::-moz-range-progress {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--rose);
+  }
+
+  .time-range::-moz-range-thumb {
+    box-sizing: border-box;
+    width: 28px;
+    height: 28px;
+    border: 7px solid var(--rose);
+    border-radius: 50%;
+    background: #fff;
+  }
+
+  .time-ticks {
+    display: flex;
+    justify-content: space-between;
+    margin: 0 1px;
+    font-size: 9.5px;
+    letter-spacing: .06em;
+    color: #b79a9c;
+  }
+
+  /* ---------- 约会卡片 ---------- */
+
+  .ticket {
+    position: relative;
+    margin: 18px 0 22px;
+    padding: 18px 16px 16px;
+    border: 1px dashed #e6b6b2;
+    border-radius: 18px;
+    background: #fff8f4;
+  }
+
+  .ticket::before,
+  .ticket::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--card);
+    transform: translateY(-50%);
+  }
+
+  .ticket::before { left: -9px; }
+  .ticket::after  { right: -9px; }
+
+  .ticket-day {
+    display: inline-block;
+    margin-bottom: 10px;
+    padding: 3px 10px;
+    border: 1px solid #e8c9c4;
+    border-radius: 999px;
+    background: var(--card);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .14em;
+    color: var(--gold);
+  }
+
+  .ticket-items {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+    margin: 2px 0 4px;
+  }
+
+  .ticket-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    border: 1px solid #f0d7d2;
+    border-radius: 999px;
+    background: var(--card);
+    font-size: 12.5px;
+    color: var(--ink);
+  }
+
+  .ticket-item-emoji {
+    font-size: 14px;
+    line-height: 1;
+  }
+
+  .ticket-sub {
+    display: block;
+    margin-top: 6px;
+    font-size: 11.5px;
+    letter-spacing: .12em;
+    color: var(--muted);
+  }
+
+  .link-btn {
+    display: inline-block;
+    margin-top: 10px;
+    padding: 10px 14px;
+    border: 0;
+    background: transparent;
+    font: inherit;
+    font-size: 13px;
+    color: var(--muted);
+    text-decoration: underline;
+    text-underline-offset: 4px;
+    cursor: pointer;
+  }
+
+  .link-btn:hover { color: var(--rose); }
+
+  .link-btn:focus-visible {
+    outline: 3px solid rgba(217, 74, 99, .25);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  /* ---------- 提示条 ---------- */
+
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: calc(28px + env(safe-area-inset-bottom));
+    z-index: 30;
+    padding: 10px 18px;
+    border-radius: 999px;
+    background: rgba(59, 37, 40, .92);
+    color: #fff;
+    font-size: 13px;
+    letter-spacing: .02em;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-50%) translateY(8px);
+    transition: opacity .25s ease, transform .25s ease;
+  }
+
+  .toast.is-visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  /* ---------- 撒出的心 ---------- */
+
+  .burst-heart {
+    position: fixed;
+    z-index: 40;
+    font-size: 13px;
+    line-height: 1;
+    color: var(--rose);
+    pointer-events: none;
+    opacity: 0;
+    animation: burstHeart .95s cubic-bezier(.15, .7, .3, 1) both;
+  }
+
+  @keyframes burstHeart {
+    0%   { opacity: 0; transform: translate(-50%, -50%) scale(.3); }
+    15%  { opacity: 1; }
+    100% { opacity: 0; transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(1.05); }
+  }
+
+  /* ---------- 无脚本提示 ---------- */
+
+  .noscript {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: var(--cream);
+    color: var(--muted);
+    font-size: 14px;
+    text-align: center;
+  }
+
+  /* ---------- 小屏适配 ---------- */
+
+  @media (max-width: 380px) {
+    .dialog { padding: 28px 20px 22px; border-radius: 24px; }
+    .option { padding: 11px 10px 9px; }
+    .option-label { font-size: 13.5px; }
+    .option-sub { font-size: 10.5px; }
+    .day { min-height: 106px; padding: 15px 10px 12px; }
+    .day-label { font-size: 23px; }
+    .day-sub { font-size: 10.5px; }
+    .time-big { font-size: 40px; }
+    .restaurant { min-height: 54px; padding: 9px 8px; }
+    .restaurant-name { font-size: 11.5px; }
+    .restaurant-tag { font-size: 9.5px; }
+  }
+
+  @media (max-height: 660px) {
+    .dialog { padding-top: 24px; padding-bottom: 20px; }
+    .seal { width: 48px; height: 48px; margin-bottom: 12px; }
+    .desc { margin: 10px 0 16px; }
+    .options { margin: 14px 0 16px; gap: 8px; }
+    .option { min-height: 82px; padding: 11px 11px 9px; }
+    .option-emoji { margin-bottom: 6px; font-size: 20px; }
+    .days { margin: 14px 0 16px; gap: 8px; }
+    .day { min-height: 102px; padding: 14px 12px 12px; }
+    .day-label { font-size: 23px; }
+    .time-display { margin: 14px 0 2px; }
+    .time-big { font-size: 40px; }
+    .restaurants { margin: 12px 0 14px; gap: 6px; }
+    .restaurant { min-height: 52px; padding: 8px 9px; }
+    .restaurant-name { font-size: 11.5px; }
+    .restaurant-tag { font-size: 9.5px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hearts { display: none; }
+    *, *::before, *::after {
+      animation-duration: .001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .001ms !important;
+    }
+  }
+</style>
+</head>
+<body>
+
+<div class="overlay" id="overlay" hidden>
+
+  <div class="hearts" aria-hidden="true">
+    <span style="--x: 6%;  --s: 16px; --t: 19s; --d: -4s;">♥</span>
+    <span style="--x: 17%; --s: 11px; --t: 24s; --d: -12s;">♥</span>
+    <span style="--x: 33%; --s: 13px; --t: 21s; --d: -8s;">♥</span>
+    <span style="--x: 54%; --s: 10px; --t: 26s; --d: -16s;">♥</span>
+    <span style="--x: 71%; --s: 15px; --t: 20s; --d: -2s;">♥</span>
+    <span style="--x: 85%; --s: 12px; --t: 23s; --d: -10s;">♥</span>
+    <span style="--x: 94%; --s: 18px; --t: 18s; --d: -6s;">♥</span>
+  </div>
+
+  <div class="dialog" id="dialog" role="dialog" aria-modal="true"
+       aria-labelledby="inviteTitle" aria-describedby="inviteDesc"
+       data-screen="invite">
+
+    <div class="seal" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+      </svg>
+    </div>
+
+    <section class="screen" id="screenInvite">
+      <p class="eyebrow">A DATE INVITATION</p>
+      <h2 id="inviteTitle" tabindex="-1">来次约会吧</h2>
+      <p class="desc" id="inviteDesc">这个周末，想和你一起，<br>浪费一点美好的时间。</p>
+
+      <button class="btn-primary" id="startBtn" type="button">
+        <span>Start the Date</span>
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+        </svg>
+      </button>
+
+      <p class="micro">点一下，先选个见面的日子</p>
+    </section>
+
+    <section class="screen" id="screenDay" hidden>
+      <p class="eyebrow">PICK A DAY</p>
+      <h2 id="dayTitle" tabindex="-1">想哪天见？</h2>
+      <p class="desc" id="dayDesc">先选一天，<br>剩下的交给我。</p>
+
+      <div class="days" id="days" role="group" aria-label="约会日期">
+        <button class="day" type="button" data-day="周六" aria-pressed="false">
+          <span class="day-en" aria-hidden="true">SATURDAY</span>
+          <span class="day-label">周六</span>
+          <span class="day-sub">把一整天都留给你</span>
+          <span class="option-check" aria-hidden="true">✓</span>
+        </button>
+
+        <button class="day" type="button" data-day="周日" aria-pressed="false">
+          <span class="day-en" aria-hidden="true">SUNDAY</span>
+          <span class="day-label">周日</span>
+          <span class="day-sub">把周末的尾巴留给你</span>
+          <span class="option-check" aria-hidden="true">✓</span>
+        </button>
+      </div>
+
+      <button class="btn-primary" id="dayNextBtn" type="button" disabled>
+        <span>下一步</span>
+      </button>
+
+      <p class="micro" id="dayHint">先选一天吧</p>
+    </section>
+
+    <section class="screen" id="screenChoose" hidden>
+      <p class="eyebrow">OUR DATE</p>
+      <h2 id="chooseTitle" tabindex="-1">想一起做什么？</h2>
+      <p class="desc" id="chooseDesc">选几个你最想做的，<br>剩下的交给我。</p>
+
+      <div class="options" id="options" role="group" aria-label="约会活动">
+        <button class="option" type="button" data-label="吃顿好的" data-emoji="🍽️" aria-pressed="false">
+          <span class="option-emoji" aria-hidden="true">🍽️</span>
+          <span class="option-label">吃顿好的</span>
+          <span class="option-sub">把想吃的都点上</span>
+          <span class="option-check" aria-hidden="true">✓</span>
+        </button>
+
+        <button class="option" type="button" data-label="看场电影" data-emoji="🎬" aria-pressed="false">
+          <span class="option-emoji" aria-hidden="true">🎬</span>
+          <span class="option-label">看场电影</span>
+          <span class="option-sub">坐最后一排</span>
+          <span class="option-check" aria-hidden="true">✓</span>
+        </button>
+
+        <button class="option" type="button" data-label="喝杯咖啡" data-emoji="☕" aria-pressed="false">
+          <span class="option-emoji" aria-hidden="true">☕</span>
+          <span class="option-label">喝杯咖啡</span>
+          <span class="option-sub">聊到打烊</span>
+          <span class="option-check" aria-hidden="true">✓</span>
+        </button>
+
+        <button class="option" type="button" data-label="拼个豆" data-emoji="🧩" aria-pressed="false">
+          <span class="option-emoji" aria-hidden="true">🧩</span>
+          <span class="option-label">拼个豆</span>
+          <span class="option-sub">拼个小纪念品</span>
+          <span class="option-check" aria-hidden="true">✓</span>
+        </button>
+
+        <button class="option" type="button" data-label="散个步" data-emoji="🚶" aria-pressed="false">
+          <span class="option-emoji" aria-hidden="true">🚶</span>
+          <span class="option-label">散个步</span>
+          <span class="option-sub">走到哪儿算哪儿</span>
+          <span class="option-check" aria-hidden="true">✓</span>
+        </button>
+
+        <button class="option" type="button" data-label="羽毛球" data-emoji="🏸" aria-pressed="false">
+          <span class="option-emoji" aria-hidden="true">🏸</span>
+          <span class="option-label">羽毛球</span>
+          <span class="option-sub">输的人请喝奶茶</span>
+          <span class="option-check" aria-hidden="true">✓</span>
+        </button>
+      </div>
+
+      <button class="btn-primary" id="confirmBtn" type="button" disabled>
+        <span>下一步</span>
+      </button>
+
+      <p class="micro" id="chooseHint">先选几个活动吧</p>
+    </section>
+
+    <section class="screen" id="screenRestaurant" hidden>
+      <p class="eyebrow">DINNER</p>
+      <h2 id="restaurantTitle" tabindex="-1">想吃哪家？</h2>
+      <p class="desc" id="restaurantDesc">本地口碑和探店推荐，<br>选一家你最想去的。</p>
+
+      <div class="restaurants" id="restaurants" role="group" aria-label="餐厅">
+        <button class="restaurant" type="button" data-name="蜀九鼎毛肚火锅" aria-pressed="false">
+          <span class="restaurant-name">蜀九鼎毛肚火锅</span>
+          <span class="restaurant-tag">毛肚火锅 · 武平店</span>
+          <span class="option-check" aria-hidden="true">✓</span>
+        </button>
+
+        <button class="restaurant" type="button" data-name="御公馆中餐厅" aria-pressed="false">
+          <span class="restaurant-name">御公馆中餐厅</span>
+          <span class="restaurant-tag">中餐 · 百家大院</span>
+          <span class="option-check" aria-hidden="true">✓</span>
+        </button>
+
+        <button class="restaurant" type="button" data-name="牛味客" aria-pressed="false">
+          <span class="restaurant-name">牛味客</span>
+          <span class="restaurant-tag">牛排 · 中心街</span>
+          <span class="option-check" aria-hidden="true">✓</span>
+        </button>
+
+        <button class="restaurant" type="button" data-name="食禄福清汤黄牛肉" aria-pressed="false">
+          <span class="restaurant-name">食禄福清汤黄牛肉</span>
+          <span class="restaurant-tag">牛肉火锅 · 七坊村</span>
+          <span class="option-check" aria-hidden="true">✓</span>
+        </button>
+
+        <button class="restaurant" type="button" data-name="老沙爹牛腩煲" aria-pressed="false">
+          <span class="restaurant-name">老沙爹牛腩煲</span>
+          <span class="restaurant-tag">牛腩煲 · 武平店</span>
+          <span class="option-check" aria-hidden="true">✓</span>
+        </button>
+
+        <button class="restaurant" type="button" data-name="武平印象" aria-pressed="false">
+          <span class="restaurant-name">武平印象</span>
+          <span class="restaurant-tag">武平菜 · 兴贤坊</span>
+          <span class="option-check" aria-hidden="true">✓</span>
+        </button>
+      </div>
+
+      <button class="btn-primary" id="restaurantNextBtn" type="button" disabled>
+        <span>下一步</span>
+      </button>
+
+      <p class="micro" id="restaurantHint">先选一家餐厅吧</p>
+    </section>
+
+    <section class="screen" id="screenTime" hidden>
+      <p class="eyebrow">PICK A TIME</p>
+      <h2 id="timeTitle" tabindex="-1">想几点见？</h2>
+      <p class="desc" id="timeDesc">最后定个时间，<br>就可以开始了。</p>
+
+      <div class="time-display">
+        <span class="time-big" id="timeBig">14:00</span>
+        <span class="time-period" id="timePeriod">下午</span>
+      </div>
+
+      <div class="time-slider">
+        <input class="time-range" id="timeRange" type="range" min="0" max="47" step="1" value="28"
+               aria-label="约会时间，24 小时制，每格 30 分钟" aria-valuetext="下午 14:00" />
+        <div class="time-ticks" aria-hidden="true">
+          <span>00</span><span>06</span><span>12</span><span>18</span><span>23:30</span>
+        </div>
+      </div>
+
+      <button class="btn-primary" id="timeNextBtn" type="button">
+        <span>Start the Date</span>
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+        </svg>
+      </button>
+
+      <p class="micro">左右滑动，每格 30 分钟；选好后点「Start the Date」</p>
+    </section>
+
+    <section class="screen" id="screenDone" hidden>
+      <p class="eyebrow">IT'S A DATE</p>
+      <h2 id="doneTitle" tabindex="-1">约会已开启</h2>
+
+      <div class="ticket">
+        <span class="ticket-day" id="ticketDay">周六 14:00</span>
+        <div class="ticket-items" id="ticketItems">
+          <span class="ticket-item">
+            <span class="ticket-item-emoji" aria-hidden="true">🎬</span>看场电影
+          </span>
+        </div>
+        <span class="ticket-sub">地点 · 等你来定</span>
+      </div>
+
+      <p class="desc" id="doneDesc">把这张卡片截图发给我，<br>就算说好了。</p>
+
+      <button class="btn-primary" id="copyBtn" type="button">
+        <span id="copyLabel">复制约会结果</span>
+      </button>
+
+      <button class="link-btn" id="reselectBtn" type="button">重新选择</button>
+    </section>
+
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</div>
+
+<noscript>
+  <div class="noscript">请启用 JavaScript 查看这封邀请。</div>
+</noscript>
+
+<script>
+(function () {
+  'use strict';
+
+  var overlay = document.getElementById('overlay');
+  var dialog = document.getElementById('dialog');
+  var toast = document.getElementById('toast');
+
+  var screens = {
+    invite: document.getElementById('screenInvite'),
+    day: document.getElementById('screenDay'),
+    choose: document.getElementById('screenChoose'),
+    restaurant: document.getElementById('screenRestaurant'),
+    time: document.getElementById('screenTime'),
+    done: document.getElementById('screenDone')
+  };
+
+  var startBtn = document.getElementById('startBtn');
+  var confirmBtn = document.getElementById('confirmBtn');
+  var copyBtn = document.getElementById('copyBtn');
+  var reselectBtn = document.getElementById('reselectBtn');
+  var dayGroup = document.getElementById('days');
+  var dayNextBtn = document.getElementById('dayNextBtn');
+  var dayHint = document.getElementById('dayHint');
+  var timeRange = document.getElementById('timeRange');
+  var timeBig = document.getElementById('timeBig');
+  var timePeriod = document.getElementById('timePeriod');
+  var timeNextBtn = document.getElementById('timeNextBtn');
+  var options = document.getElementById('options');
+  var chooseHint = document.getElementById('chooseHint');
+  var restaurantGroup = document.getElementById('restaurants');
+  var restaurantNextBtn = document.getElementById('restaurantNextBtn');
+  var restaurantHint = document.getElementById('restaurantHint');
+  var ticketDay = document.getElementById('ticketDay');
+  var ticketItems = document.getElementById('ticketItems');
+
+  var TITLES = {
+    invite: 'inviteTitle',
+    day: 'dayTitle',
+    choose: 'chooseTitle',
+    restaurant: 'restaurantTitle',
+    time: 'timeTitle',
+    done: 'doneTitle'
+  };
+
+  var DESCS = {
+    invite: 'inviteDesc',
+    day: 'dayDesc',
+    choose: 'chooseDesc',
+    restaurant: 'restaurantDesc',
+    time: 'timeDesc',
+    done: 'doneDesc'
+  };
+
+  var selectedDay = null;
+  var selectedTime = null;
+  var selectedActivities = [];
+  var selectedRestaurant = null;
+  var current = 'invite';
+  var isOpen = false;
+  var toastTimer = null;
+
+  function showScreen(name) {
+    current = name;
+
+    Object.keys(screens).forEach(function (key) {
+      screens[key].hidden = key !== name;
+    });
+
+    dialog.dataset.screen = name;
+    dialog.setAttribute('aria-labelledby', TITLES[name]);
+    dialog.setAttribute('aria-describedby', DESCS[name]);
+    dialog.scrollTop = 0;
+
+    document.title = name === 'done' ? '约会已开启 ♥' : '来次约会吧';
+
+    var heading = document.getElementById(TITLES[name]);
+    if (heading) {
+      window.requestAnimationFrame(function () {
+        heading.focus({ preventScroll: true });
+      });
+    }
+  }
+
+  function openDialog() {
+    if (isOpen) return;
+    isOpen = true;
+    overlay.hidden = false;
+    document.body.classList.add('is-locked');
+    showScreen('invite');
+  }
+
+  startBtn.addEventListener('click', function () {
+    showScreen('day');
+  });
+
+  dayGroup.addEventListener('click', function (event) {
+    var btn = event.target.closest ? event.target.closest('.day') : null;
+    if (!btn) return;
+
+    var wasSelected = btn.getAttribute('aria-pressed') === 'true';
+
+    Array.prototype.forEach.call(dayGroup.querySelectorAll('.day'), function (el) {
+      el.setAttribute('aria-pressed', 'false');
+    });
+
+    if (wasSelected) {
+      selectedDay = null;
+    } else {
+      btn.setAttribute('aria-pressed', 'true');
+      selectedDay = btn.getAttribute('data-day');
+    }
+
+    dayNextBtn.disabled = !selectedDay;
+    dayHint.textContent = selectedDay ? '选好了，点「下一步」' : '先选一天吧';
+  });
+
+  dayNextBtn.addEventListener('click', function () {
+    if (!selectedDay) return;
+    showScreen('choose');
+  });
+
+  function pad2(value) {
+    return value < 10 ? '0' + value : String(value);
+  }
+
+  function periodOf(hour) {
+    if (hour < 6) return '凌晨';
+    if (hour < 12) return '上午';
+    if (hour < 18) return '下午';
+    return '晚上';
+  }
+
+  function updateTime() {
+    var slot = parseInt(timeRange.value, 10);
+    if (isNaN(slot)) slot = 28;
+
+    var hour = Math.floor(slot / 2);
+    var minute = (slot % 2) * 30;
+
+    selectedTime = pad2(hour) + ':' + pad2(minute);
+    timeBig.textContent = selectedTime;
+    timePeriod.textContent = periodOf(hour);
+    timeRange.style.setProperty('--fill', (slot / 47 * 100) + '%');
+    timeRange.setAttribute('aria-valuetext', periodOf(hour) + ' ' + selectedTime);
+  }
+
+  timeRange.addEventListener('input', updateTime);
+  timeRange.addEventListener('change', updateTime);
+  updateTime();
+
+  timeNextBtn.addEventListener('click', function () {
+    if (!selectedActivities.length || !selectedDay || !selectedTime || current !== 'time') return;
+    if (hasFoodSelected() && !selectedRestaurant) return;
+
+    ticketDay.textContent = selectedDay + ' ' + selectedTime;
+    renderTicketItems();
+
+    showScreen('done');
+    burstHearts();
+  });
+
+  function renderTicketItems() {
+    ticketItems.textContent = '';
+
+    selectedActivities.forEach(function (item) {
+      appendTicketChip(item.emoji, item.label);
+
+      if (item.label === '吃顿好的' && selectedRestaurant) {
+        appendTicketChip('🏮', selectedRestaurant);
+      }
+    });
+  }
+
+  function appendTicketChip(emojiText, label) {
+    var chip = document.createElement('span');
+    chip.className = 'ticket-item';
+
+    var emoji = document.createElement('span');
+    emoji.className = 'ticket-item-emoji';
+    emoji.setAttribute('aria-hidden', 'true');
+    emoji.textContent = emojiText;
+
+    chip.appendChild(emoji);
+    chip.appendChild(document.createTextNode(label));
+    ticketItems.appendChild(chip);
+  }
+
+  options.addEventListener('click', function (event) {
+    var btn = event.target.closest ? event.target.closest('.option') : null;
+    if (!btn) return;
+
+    var pressed = btn.getAttribute('aria-pressed') === 'true';
+    btn.setAttribute('aria-pressed', pressed ? 'false' : 'true');
+
+    selectedActivities = Array.prototype.map.call(
+      options.querySelectorAll('.option[aria-pressed="true"]'),
+      function (el) {
+        return {
+          label: el.getAttribute('data-label'),
+          emoji: el.getAttribute('data-emoji')
+        };
+      }
+    );
+
+    var count = selectedActivities.length;
+    confirmBtn.disabled = count === 0;
+
+    if (count === 0) {
+      chooseHint.textContent = '先选几个活动吧';
+    } else if (hasFoodSelected()) {
+      chooseHint.textContent = '已选 ' + count + ' 个，下一步选餐厅';
+    } else {
+      chooseHint.textContent = '已选 ' + count + ' 个，点「下一步」';
+    }
+  });
+
+  function hasFoodSelected() {
+    return selectedActivities.some(function (item) {
+      return item.label === '吃顿好的';
+    });
+  }
+
+  confirmBtn.addEventListener('click', function () {
+    if (!selectedActivities.length || !selectedDay || current !== 'choose') return;
+
+    if (hasFoodSelected()) {
+      showScreen('restaurant');
+    } else {
+      showScreen('time');
+    }
+  });
+
+  restaurantGroup.addEventListener('click', function (event) {
+    var btn = event.target.closest ? event.target.closest('.restaurant') : null;
+    if (!btn) return;
+
+    var pressed = btn.getAttribute('aria-pressed') === 'true';
+
+    Array.prototype.forEach.call(restaurantGroup.querySelectorAll('.restaurant'), function (el) {
+      el.setAttribute('aria-pressed', 'false');
+    });
+
+    if (pressed) {
+      selectedRestaurant = null;
+    } else {
+      btn.setAttribute('aria-pressed', 'true');
+      selectedRestaurant = btn.getAttribute('data-name');
+    }
+
+    restaurantNextBtn.disabled = !selectedRestaurant;
+    restaurantHint.textContent = selectedRestaurant
+      ? '选好了，点「下一步」'
+      : '先选一家餐厅吧';
+  });
+
+  restaurantNextBtn.addEventListener('click', function () {
+    if (!selectedRestaurant) return;
+    showScreen('time');
+  });
+
+  reselectBtn.addEventListener('click', function () {
+    showScreen('day');
+  });
+
+  copyBtn.addEventListener('click', function () {
+    if (!selectedActivities.length || !selectedDay || !selectedTime) return;
+    if (hasFoodSelected() && !selectedRestaurant) return;
+
+    var activitiesText = selectedActivities.map(function (item) {
+      var label = item.label;
+
+      if (item.label === '吃顿好的' && selectedRestaurant) {
+        label += '（' + selectedRestaurant + '）';
+      }
+
+      return label + ' ' + item.emoji;
+    }).join('、');
+
+    var text = '我们的约会：' + selectedDay + ' ' + selectedTime +
+               '\n想一起：' + activitiesText +
+               '\n地点你来定，我负责期待。';
+
+    copyText(text).then(function () {
+      toast.textContent = '已复制，发给我吧 ♥';
+      showToast();
+    }).catch(function () {
+      toast.textContent = '复制失败，截图发我也行';
+      showToast();
+    });
+  });
+
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text).catch(function () {
+        return legacyCopy(text);
+      });
+    }
+    return legacyCopy(text);
+  }
+
+  function legacyCopy(text) {
+    return new Promise(function (resolve, reject) {
+      var area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.top = '-1000px';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      area.setSelectionRange(0, text.length);
+
+      var ok = false;
+      try {
+        ok = document.execCommand('copy');
+      } catch (error) {
+        ok = false;
+      }
+
+      document.body.removeChild(area);
+      ok ? resolve() : reject(new Error('copy failed'));
+    });
+  }
+
+  function showToast() {
+    window.clearTimeout(toastTimer);
+    toast.classList.add('is-visible');
+    toastTimer = window.setTimeout(function () {
+      toast.classList.remove('is-visible');
+    }, 2200);
+  }
+
+  function burstHearts() {
+    if (window.matchMedia &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      return;
+    }
+
+    var seal = dialog.querySelector('.seal');
+    if (!seal) return;
+
+    var rect = seal.getBoundingClientRect();
+    if (!rect.width) return;
+
+    for (var i = 0; i < 10; i++) {
+      var heart = document.createElement('span');
+      heart.className = 'burst-heart';
+      heart.textContent = '♥';
+
+      var angle = (Math.PI * 2 * i) / 10;
+      var distance = 54 + Math.random() * 34;
+
+      heart.style.left = (rect.left + rect.width / 2) + 'px';
+      heart.style.top = (rect.top + rect.height / 2) + 'px';
+      heart.style.setProperty('--dx', Math.cos(angle) * distance + 'px');
+      heart.style.setProperty('--dy', Math.sin(angle) * distance + 'px');
+      heart.style.animationDelay = (i * 14) + 'ms';
+
+      document.body.appendChild(heart);
+
+      (function (el) {
+        window.setTimeout(function () {
+          el.remove();
+        }, 1200);
+      })(heart);
+    }
+  }
+
+  function getFocusable() {
+    var screen = screens[current];
+    if (!screen) return [];
+
+    var nodes = screen.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href], [tabindex]:not([tabindex="-1"])');
+    var list = [];
+
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i].offsetParent !== null) {
+        list.push(nodes[i]);
+      }
+    }
+
+    return list;
+  }
+
+  document.addEventListener('keydown', function (event) {
+    if (!isOpen) return;
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      return;
+    }
+
+    if (event.key !== 'Tab') return;
+
+    var list = getFocusable();
+    if (!list.length) return;
+
+    var index = list.indexOf(document.activeElement);
+
+    if (index === -1) {
+      event.preventDefault();
+      list[0].focus();
+      return;
+    }
+
+    var next = event.shiftKey
+      ? (index - 1 + list.length) % list.length
+      : (index + 1) % list.length;
+
+    event.preventDefault();
+    list[next].focus();
+  });
+
+  openDialog();
+})();
+</script>
+</body>
+</html>
